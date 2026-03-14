@@ -4,10 +4,11 @@
 Добавление человека: положи фото в known_faces/ИМЯ/photo.jpg
 """
 
-import os
 import time
 import subprocess
 import threading
+from pathlib import Path
+
 import cv2
 import numpy as np
 import face_recognition
@@ -28,6 +29,16 @@ LANG = "ru"
 
 UNKNOWN_LABEL = "Незнакомец"
 
+# Аргументы espeak-ng по языку
+ESPEAK_ARGS = {
+    "ru": ["-v", "ru", "-s", "140"],
+    "en": ["-v", "en"],
+}
+
+DRAW_SCALE = 1.0 / FRAME_SCALE  # обратный масштаб для отрисовки рамок
+
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
+
 # -------------------------
 
 
@@ -35,34 +46,33 @@ def load_known_faces(directory: str):
     encodings = []
     names = []
 
-    if not os.path.isdir(directory):
+    faces_dir = Path(directory)
+    if not faces_dir.is_dir():
         print(f"[!] Папка {directory} не найдена. Создай её и добавь фото.")
         return encodings, names
 
-    for person_name in sorted(os.listdir(directory)):
-        person_dir = os.path.join(directory, person_name)
-        if not os.path.isdir(person_dir):
+    for person_dir in sorted(faces_dir.iterdir()):
+        if not person_dir.is_dir():
             continue
 
         photos_loaded = 0
-        for filename in os.listdir(person_dir):
-            if not filename.lower().endswith((".jpg", ".jpeg", ".png")):
+        for photo_path in person_dir.iterdir():
+            if photo_path.suffix.lower() not in IMAGE_SUFFIXES:
                 continue
 
-            path = os.path.join(person_dir, filename)
-            image = face_recognition.load_image_file(path)
+            image = face_recognition.load_image_file(str(photo_path))
             face_encs = face_recognition.face_encodings(image)
 
             if not face_encs:
-                print(f"[!] Лицо не найдено: {path}")
+                print(f"[!] Лицо не найдено: {photo_path}")
                 continue
 
             encodings.append(face_encs[0])
-            names.append(person_name)
+            names.append(person_dir.name)
             photos_loaded += 1
 
         if photos_loaded > 0:
-            print(f"[+] Загружено {photos_loaded} фото: {person_name}")
+            print(f"[+] Загружено {photos_loaded} фото: {person_dir.name}")
         else:
             print(f"[!] Нет подходящих фото в {person_dir}")
 
@@ -74,16 +84,8 @@ def speak(text: str):
     """Произносит текст через espeak-ng в отдельном потоке."""
     def _run():
         try:
-            if LANG == "ru":
-                subprocess.run(
-                    ["espeak-ng", "-v", "ru", "-s", "140", text],
-                    check=True, capture_output=True
-                )
-            else:
-                subprocess.run(
-                    ["espeak-ng", text],
-                    check=True, capture_output=True
-                )
+            args = ["espeak-ng"] + ESPEAK_ARGS.get(LANG, []) + [text]
+            subprocess.run(args, check=True, capture_output=True)
         except FileNotFoundError:
             print(f"[!] espeak-ng не установлен. Приветствие: {text}")
         except subprocess.CalledProcessError as e:
@@ -133,9 +135,8 @@ def main():
     last_greeted: dict[str, float] = {}
     frame_count = 0
 
-    # Результаты последнего анализа
-    face_locations = []
-    face_names = []
+    # Список пар (bbox, name) от последнего анализа; отображается до следующего
+    detected: list[tuple[tuple, str]] = []
 
     while True:
         ret, frame = cap.read()
@@ -154,27 +155,25 @@ def main():
             face_locations = face_recognition.face_locations(rgb_small, model="hog")
             face_encodings = face_recognition.face_encodings(rgb_small, face_locations)
 
-            face_names = []
-            for enc in face_encodings:
+            detected = []
+            for bbox, enc in zip(face_locations, face_encodings):
                 name = identify_face(enc, known_encodings, known_names)
-                face_names.append(name)
+                detected.append((bbox, name))
 
                 if name != UNKNOWN_LABEL:
                     now = time.time()
-                    last_time = last_greeted.get(name, 0)
-                    if now - last_time > GREET_COOLDOWN:
+                    if now - last_greeted.get(name, 0) > GREET_COOLDOWN:
                         last_greeted[name] = now
                         greeting = GREETINGS[LANG].format(name)
                         print(f"[>] {greeting}")
                         speak(greeting)
 
         # Рисуем рамки (масштабируем координаты обратно)
-        scale = 1.0 / FRAME_SCALE
-        for (top, right, bottom, left), name in zip(face_locations, face_names):
-            top = int(top * scale)
-            right = int(right * scale)
-            bottom = int(bottom * scale)
-            left = int(left * scale)
+        for (top, right, bottom, left), name in detected:
+            top = int(top * DRAW_SCALE)
+            right = int(right * DRAW_SCALE)
+            bottom = int(bottom * DRAW_SCALE)
+            left = int(left * DRAW_SCALE)
 
             color = (0, 200, 0) if name != UNKNOWN_LABEL else (0, 0, 200)
             draw_box(frame, top, right, bottom, left, name, color)
