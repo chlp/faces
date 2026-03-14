@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A minimal face recognition app for Orange Pi 5 Max (ARM64, Ubuntu/Debian). A USB webcam watches the apartment entrance; when a known person appears, the app greets them by name via espeak-ng TTS.
+A minimal face recognition app for Orange Pi 5 Max (ARM64, Ubuntu/Debian). A USB webcam watches the apartment entrance; when a known person appears, the app greets them by name via espeak-ng TTS. Inference runs on the RK3588 NPU.
 
 ## Hardware target
 
@@ -15,8 +15,19 @@ A minimal face recognition app for Orange Pi 5 Max (ARM64, Ubuntu/Debian). A USB
 ## Setup & run
 
 ```bash
-chmod +x install.sh && ./install.sh   # one-time: installs deps, compiles dlib (~15 min)
+# 1. Системные зависимости + venv + Python-пакеты
+bash install.sh
+
+# 2. Скачать rknn_toolkit_lite2 (.whl) вручную:
+#    https://github.com/airockchip/rknn-toolkit2/tree/master/rknn-toolkit-lite2/packages
+#    положить рядом, затем:
 source venv/bin/activate
+pip install rknn_toolkit_lite2-*.whl
+
+# 3. Скачать RKNN-модели
+bash download_models.sh
+
+# 4. Запуск
 python3 main.py
 ```
 
@@ -33,27 +44,50 @@ Multiple photos per person improve accuracy. Face must be clearly visible.
 
 - `main.py` — single-file app, all logic here
 - `known_faces/` — face database, one subfolder per person
-- Recognition runs on every `PROCESS_EVERY_N`-th frame at `FRAME_SCALE` resolution to save CPU
+- `models/` — RKNN model files (`scrfd.rknn`, `arcface.rknn`)
+
+### NPU pipeline
+
+| Stage | Model | Input | Output |
+|---|---|---|---|
+| Face detection | SCRFD-2.5G | 640×640, BGR→RGB, (x−127.5)/128 | 9 tensors (score/bbox/kps × 3 strides) |
+| Face encoding | MobileFaceNet/ArcFace | 112×112 aligned, BGR→RGB, (x−127.5)/128 | 512-dim embedding |
+
+**Detection post-processing** (`_decode_scrfd`): anchor-based decoding across 3 strides (8/16/32), 2 anchors per cell, followed by NMS. Anchor centers are pre-computed in `_ANCHORS`. Bbox predictions are distances (lt/rb) in stride units; keypoints are offsets in stride units.
+
+**Recognition**: cosine similarity between L2-normalized embeddings (`known_encodings @ encoding`). Threshold: `RECOGNITION_THRESHOLD` (default 0.40).
+
+**Face alignment**: 5-point affine transform (`cv2.estimateAffinePartial2D`) to the standard ArcFace 112×112 template `_ARCFACE_TPL`.
+
+- Recognition runs on every `PROCESS_EVERY_N`-th frame to save CPU
 - Greeting cooldown (`GREET_COOLDOWN` seconds) prevents repeated greetings
 - TTS runs in a daemon thread via `subprocess` → `espeak-ng`
-- Face detection uses **HOG model** (`model="hog"` in `face_locations`) — CPU-friendly, no GPU needed
-- `opencv-python-headless` is used intentionally for ARM (no bundled Qt/GTK), but `cv2.imshow` still requires a connected display or X server
-
-## Dependency notes
-
-`install.sh` installs `dlib` (compiled from source, ~15 min) **before** `requirements.txt` because `face_recognition` depends on dlib. If installing manually, preserve this order:
-```bash
-pip install dlib        # must come first
-pip install -r requirements.txt
-```
 
 ## Tuning knobs (top of main.py)
 
 | Variable | Default | Effect |
 |---|---|---|
 | `CAMERA_INDEX` | 0 | Try 1 or 2 if camera not found |
-| `FRAME_SCALE` | 0.5 | Lower = faster but less accurate |
-| `RECOGNITION_TOLERANCE` | 0.55 | Lower = stricter matching |
+| `RECOGNITION_THRESHOLD` | 0.40 | Cosine similarity cutoff (higher = stricter) |
 | `GREET_COOLDOWN` | 300 | Seconds between greetings per person |
-| `PROCESS_EVERY_N` | 3 | Process every Nth frame |
+| `PROCESS_EVERY_N` | 2 | Process every Nth frame |
 | `LANG` | "ru" | "ru" or "en" |
+| `_SCORE_THRESH` | 0.50 | Face detection confidence threshold |
+| `_NMS_THRESH` | 0.40 | NMS IoU threshold |
+
+## Dependency notes
+
+`rknn_toolkit_lite2` is **not on PyPI** — download the matching `.whl` from:
+https://github.com/airockchip/rknn-toolkit2/tree/master/rknn-toolkit-lite2/packages
+
+RKNN model files come from:
+https://github.com/airockchip/rknn_model_zoo (handled by `download_models.sh`)
+
+`opencv-python-headless` is used intentionally for ARM (no bundled Qt/GTK), but `cv2.imshow` still requires a connected display or X server.
+
+## Troubleshooting SCRFD output format
+
+If faces are not detected, the model may use a different tensor ordering or normalization. Check:
+1. Print `[o.shape for o in outputs]` in `FaceDetector.detect()` to verify tensor sizes
+2. Expected sizes at 640×640: score tensors with 12800 / 3200 / 800 elements
+3. If bbox distances don't need stride multiplication, remove `* stride` in `_decode_scrfd`
