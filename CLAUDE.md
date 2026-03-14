@@ -36,6 +36,16 @@ Multiple photos per person improve accuracy. Face must be clearly visible.
 - Recognition runs on every `PROCESS_EVERY_N`-th frame at `FRAME_SCALE` resolution to save CPU
 - Greeting cooldown (`GREET_COOLDOWN` seconds) prevents repeated greetings
 - TTS runs in a daemon thread via `subprocess` → `espeak-ng`
+- Face detection uses **HOG model** (`model="hog"` in `face_locations`) — CPU-friendly, no GPU needed
+- `opencv-python-headless` is used intentionally for ARM (no bundled Qt/GTK), but `cv2.imshow` still requires a connected display or X server
+
+## Dependency notes
+
+`install.sh` installs `dlib` (compiled from source, ~15 min) **before** `requirements.txt` because `face_recognition` depends on dlib. If installing manually, preserve this order:
+```bash
+pip install dlib        # must come first
+pip install -r requirements.txt
+```
 
 ## Tuning knobs (top of main.py)
 

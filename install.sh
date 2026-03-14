@@ -13,8 +13,12 @@ sudo apt-get install -y \
     liblapack-dev \
     libx11-dev \
     libgtk-3-dev \
-    espeak-ng \
-    v4l-utils
+    espeak-ng
+
+# v4l-utils нужен только для диагностики камеры (v4l2-ctl --list-devices)
+# ставим отдельно, игнорируя held-статус пакета
+sudo apt-get install -y --allow-change-held-packages v4l-utils || \
+    echo "[!] v4l-utils не установлен (необязательно для работы)"
 
 echo "=== Создание виртуального окружения ==="
 python3 -m venv venv
