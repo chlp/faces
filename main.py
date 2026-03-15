@@ -37,7 +37,7 @@ WEB_DIR               = "/tmp/faces_web"
 FRAME_FILE            = WEB_DIR + "/frame.jpg"
 DETECTIONS_FILE       = WEB_DIR + "/detections.json"
 SNAPSHOTS_DIR         = WEB_DIR + "/snap"
-SNAPSHOTS_MAX         = 10
+SNAPSHOTS_MAX         = 15
 FRAME_INTERVAL        = 1.0
 WEB_EVENT_COOLDOWN    = 60.0  # секунд: не повторять событие для тех же людей
 
@@ -95,57 +95,86 @@ _HTML = """<!DOCTYPE html>
 <title>Камера</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%}
-body{background:#0f0f0f;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFont,sans-serif;
-  display:flex;flex-direction:column;height:100%;
-  padding:12px;padding-top:max(12px,env(safe-area-inset-top));gap:10px}
-header{display:flex;align-items:center;gap:8px;flex-shrink:0}
-#dot{width:8px;height:8px;border-radius:50%;background:#555;transition:background .3s}
+html,body{height:100%;background:#0a0a0a;color:#e0e0e0;
+  font-family:-apple-system,BlinkMacSystemFont,sans-serif}
+body{display:grid;grid-template-rows:auto 1fr;
+  padding:10px;padding-top:max(10px,env(safe-area-inset-top));gap:10px;overflow:hidden}
+header{display:flex;align-items:center;gap:8px}
+#dot{width:8px;height:8px;border-radius:50%;background:#555;transition:background .3s;flex-shrink:0}
 #dot.live{background:#30d158}
-header span{font-size:.8rem;font-weight:600;color:#555;letter-spacing:.08em;text-transform:uppercase}
-#main{display:flex;gap:10px;flex:1;min-height:0}
-#cam-wrap{background:#1c1c1e;border-radius:12px;overflow:hidden;flex-shrink:0;width:240px;
-  display:flex;align-items:center;justify-content:center}
-#cam{width:100%;height:100%;object-fit:contain;display:block}
-#feed-wrap{flex:1;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;align-content:start}
-.card{background:#1c1c1e;border-radius:10px;overflow:hidden;display:flex;flex-direction:column}
-.thumb{width:100%;aspect-ratio:4/3;object-fit:cover;display:block;background:#111}
-.info{padding:6px 8px}
-.names{font-size:.8rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.names.k{color:#30d158}.names.u{color:#ff453a}
-.ts{font-size:.65rem;color:#555;margin-top:2px}
-#empty{color:#333;font-size:.85rem;margin:auto;text-align:center}
+header span{font-size:.75rem;font-weight:600;color:#555;letter-spacing:.08em;text-transform:uppercase}
+#grid{display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(4,1fr);
+  gap:8px;min-height:0}
+.cell{background:#1c1c1e;border-radius:10px;overflow:hidden;display:flex;flex-direction:column;min-height:0}
+.cell img{width:100%;flex:1;object-fit:cover;display:block;min-height:0}
+.info{padding:5px 7px;flex-shrink:0;background:#1c1c1e}
+.names{font-size:.75rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.names.k{color:#30d158}.names.u{color:#ff453a}.names.empty{color:#333}
+.meta{font-size:.65rem;color:#555;margin-top:1px;display:flex;gap:6px}
+.count{color:#888}
+#live-label{font-size:.65rem;color:#555;padding:4px 7px;flex-shrink:0;text-align:center}
 </style></head><body>
 <header><span id="dot"></span><span>Камера</span></header>
-<div id="main">
-  <div id="cam-wrap"><img id="cam" alt=""></div>
-  <div id="feed-wrap"><p id="empty">Ожидание...</p></div>
+<div id="grid">
+  <div class="cell" id="cell-live">
+    <img id="cam" alt="">
+    <div id="live-label">прямой эфир</div>
+  </div>
 </div>
 <script>
-const feed=document.getElementById('feed-wrap'),dot=document.getElementById('dot');
-let lastTs=0;
-function fmt(ts){
-  const s=(Date.now()-ts*1000)/1000;
-  if(s<60)return'только что';
-  if(s<3600)return Math.floor(s/60)+'\u00a0мин назад';
-  return new Date(ts*1000).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
+const grid=document.getElementById('grid'),dot=document.getElementById('dot');
+const TOTAL=16;
+let lastTs=0,cells=[];
+
+// Создаём 15 пустых ячеек для детекций
+for(let i=0;i<TOTAL-1;i++){
+  const c=document.createElement('div');
+  c.className='cell';
+  c.innerHTML='<img src="" alt="" style="visibility:hidden"><div class="info"><div class="names empty">—</div><div class="meta"><span class="count"></span></div></div>';
+  grid.appendChild(c);
+  cells.push(c);
 }
+
+function fmtDate(ts){
+  const d=new Date(ts*1000);
+  const dd=String(d.getDate()).padStart(2,'0');
+  const mm=String(d.getMonth()+1).padStart(2,'0');
+  const hh=String(d.getHours()).padStart(2,'0');
+  const mi=String(d.getMinutes()).padStart(2,'0');
+  const ss=String(d.getSeconds()).padStart(2,'0');
+  return dd+'.'+mm+' '+hh+':'+mi+':'+ss;
+}
+
 function rebuild(evs){
-  feed.innerHTML='';
-  if(!evs.length){feed.innerHTML='<p id="empty">Ожидание...</p>';return;}
-  evs.slice().reverse().forEach(ev=>{
+  const list=evs.slice().reverse();
+  cells.forEach((c,i)=>{
+    const ev=list[i];
+    const img=c.querySelector('img');
+    const nm=c.querySelector('.names');
+    const meta=c.querySelector('.meta');
+    if(!ev){
+      img.style.visibility='hidden';img.src='';
+      nm.className='names empty';nm.textContent='—';
+      meta.innerHTML='';
+      return;
+    }
+    img.style.visibility='';
+    if(img.dataset.ts!==String(ev.ts)){
+      img.dataset.ts=ev.ts;
+      img.src='snap/'+ev.img+'.jpg?t='+ev.ts;
+    }
     const kn=ev.names.filter(n=>n!=='Незнакомец');
     const un=ev.names.filter(n=>n==='Незнакомец').length;
+    const total=ev.names.length;
     const hasKnown=kn.length>0;
     let label=kn.join(', ');
-    if(un>0)label+=(label?'\u00a0+\u00a0':'')+(un===1?'Незнакомец':un+'\u00a0незн.');
-    const d=document.createElement('div');
-    d.className='card';d.dataset.ts=ev.ts;
-    d.innerHTML=`<img class="thumb" src="snap/${ev.img}.jpg?t=${ev.ts}" loading="lazy">
-    <div class="info"><div class="names ${hasKnown?'k':'u'}">${label}</div><div class="ts">${fmt(ev.ts)}</div></div>`;
-    feed.appendChild(d);
+    if(un>0)label+=(label?'\u00a0+\u00a0':'')+(un===1?'незн.':un+'\u00a0незн.');
+    nm.className='names '+(hasKnown?'k':'u');
+    nm.textContent=label||'Незнакомец';
+    meta.innerHTML='<span>'+fmtDate(ev.ts)+'</span><span class="count">'+total+'\u00a0чел.</span>';
   });
 }
+
 function poll(){
   fetch('detections.json?t='+Date.now()).then(r=>r.json()).then(evs=>{
     dot.className='live';
@@ -153,8 +182,6 @@ function poll(){
     if(newTs!==lastTs){lastTs=newTs;rebuild(evs);}
   }).catch(()=>dot.className='');
 }
-setInterval(()=>feed.querySelectorAll('.card').forEach(c=>{
-  c.querySelector('.ts').textContent=fmt(+c.dataset.ts);}),15000);
 poll();setInterval(poll,1000);
 const cam=document.getElementById('cam');
 setInterval(()=>{cam.src='frame.jpg?t='+Date.now();},1000);
