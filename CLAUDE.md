@@ -50,8 +50,8 @@ Multiple photos per person improve accuracy. Face must be clearly visible.
 
 | Stage | Model | Input | Output |
 |---|---|---|---|
-| Face detection | SCRFD-2.5G | 640×640, BGR→RGB, (x−127.5)/128 | 9 tensors (score/bbox/kps × 3 strides) |
-| Face encoding | MobileFaceNet/ArcFace | 112×112 aligned, BGR→RGB, (x−127.5)/128 | 512-dim embedding |
+| Face detection | SCRFD-10G | 640×640, BGR→RGB, (x−127.5)/128 | 9 tensors (score/bbox/kps × 3 strides) |
+| Face encoding | ArcFace ResNet100 (Glint360K) | 112×112 aligned, BGR→RGB, (x−127.5)/128 | 512-dim embedding |
 
 **Detection post-processing** (`_decode_scrfd`): anchor-based decoding across 3 strides (8/16/32), 2 anchors per cell, followed by NMS. Anchor centers are pre-computed in `_ANCHORS`. Bbox predictions are distances (lt/rb) in stride units; keypoints are offsets in stride units.
 

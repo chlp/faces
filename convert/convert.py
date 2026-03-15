@@ -1,9 +1,12 @@
 """
 Скачивает ONNX-модели InsightFace и конвертирует их в RKNN для RK3588.
 
-Модели из пакета buffalo_l:
-  det_10g.onnx   → /output/scrfd.rknn   (SCRFD-10G, детекция лиц)
-  w600k_r50.onnx → /output/arcface.rknn (ArcFace ResNet50, 512-мерный эмбеддинг)
+Модели из пакета antelopev2:
+  scrfd_10g_bnkps.onnx → /output/scrfd.rknn   (SCRFD-10G, детекция лиц)
+  glintr100.onnx       → /output/arcface.rknn (ArcFace ResNet100 / Glint360K, 512-мерный эмбеддинг)
+
+ArcFace ResNet100 (~24 GFLOPs) значительно точнее ResNet50 (~4 GFLOPs),
+обучен на Glint360K (360М пар, 17М уникальных лиц).
 """
 
 import urllib.request
@@ -32,11 +35,11 @@ OUTPUT_DIR = Path("/output")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Загрузка моделей ──────────────────────────────────────────────────────────
-PACK_URL = "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip"
-PACK_ZIP  = Path("/tmp/buffalo_l.zip")
-PACK_DIR  = Path("/tmp/buffalo_l")
+PACK_URL = "https://github.com/deepinsight/insightface/releases/download/v0.7/antelopev2.zip"
+PACK_ZIP  = Path("/tmp/antelopev2.zip")
+PACK_DIR  = Path("/tmp/antelopev2")
 
-print("[*] Скачивание insightface buffalo_l (SCRFD-10G + ArcFace ResNet50)...")
+print("[*] Скачивание insightface antelopev2 (SCRFD-10G + ArcFace ResNet100/Glint360K)...")
 urllib.request.urlretrieve(PACK_URL, PACK_ZIP)
 
 with zipfile.ZipFile(PACK_ZIP) as z:
@@ -49,8 +52,8 @@ def find_onnx(directory, keyword):
             return str(p)
     return None
 
-det_onnx  = find_onnx(PACK_DIR, "det_10g") or find_onnx(PACK_DIR, "det_2.5g") or find_onnx(PACK_DIR, "det_500m")
-face_onnx = find_onnx(PACK_DIR, "w600k_r50") or find_onnx(PACK_DIR, "mbf") or find_onnx(PACK_DIR, "w600k")
+det_onnx  = find_onnx(PACK_DIR, "scrfd_10g") or find_onnx(PACK_DIR, "det_10g") or find_onnx(PACK_DIR, "det_2.5g")
+face_onnx = find_onnx(PACK_DIR, "glintr100") or find_onnx(PACK_DIR, "w600k_r50") or find_onnx(PACK_DIR, "w600k")
 
 if not det_onnx:
     raise FileNotFoundError("Не нашёл det_*.onnx в архиве. Файлы: " +
@@ -92,7 +95,7 @@ def convert(onnx_path: str, output_path: str, label: str, input_size: int):
     print(f"[+] Сохранено: {output_path}  ({size_mb:.1f} МБ)")
 
 
-convert(det_onnx,  str(OUTPUT_DIR / "scrfd.rknn"),   "SCRFD-10G → scrfd.rknn",     640)
-convert(face_onnx, str(OUTPUT_DIR / "arcface.rknn"), "ArcFace R50 → arcface.rknn", 112)
+convert(det_onnx,  str(OUTPUT_DIR / "scrfd.rknn"),   "SCRFD-10G → scrfd.rknn",          640)
+convert(face_onnx, str(OUTPUT_DIR / "arcface.rknn"), "ArcFace ResNet100 → arcface.rknn", 112)
 
 print("\n[✓] Готово! Скопируй models/scrfd.rknn и models/arcface.rknn на Orange Pi.")
