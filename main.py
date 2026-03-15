@@ -427,13 +427,21 @@ def load_known_faces(directory, detector: FaceDetector, encoder: FaceEncoder):
 # ── Распознавание ─────────────────────────────────────────────────────────────
 def identify_face(encoding, known_encodings, known_names):
     if len(known_encodings) == 0:
-        return UNKNOWN_LABEL, 0.0
+        return UNKNOWN_LABEL, 0.0, []
     # Косинусное сходство (оба вектора уже L2-нормализованы → просто dot product)
     sims = known_encodings @ encoding
     best = int(np.argmax(sims))
     score = float(sims[best])
     name = known_names[best] if score >= RECOGNITION_THRESHOLD else UNKNOWN_LABEL
-    return name, score
+    # Топ кандидаты для дебага
+    unique_names = sorted(set(known_names))
+    top = []
+    for n in unique_names:
+        idxs = [i for i, nm in enumerate(known_names) if nm == n]
+        best_n = float(max(sims[i] for i in idxs))
+        top.append((n, best_n))
+    top.sort(key=lambda x: -x[1])
+    return name, score, top
 
 
 # ── Главный цикл ─────────────────────────────────────────────────────────────
@@ -493,11 +501,17 @@ def main():
                     continue
                 enc = encoder.encode(frame, kps)
                 if enc is not None:
-                    name, score = identify_face(enc, known_encodings, known_names)
+                    name, score, top_candidates = identify_face(enc, known_encodings, known_names)
                 else:
-                    name, score = UNKNOWN_LABEL, 0.0
-                detected.append((bbox, name))
+                    name, score, top_candidates = UNKNOWN_LABEL, 0.0, []
+                detected.append((bbox, name, score))
                 current_names.add(name)
+
+                if DEBUG:
+                    ts = time.strftime("%H:%M:%S")
+                    cands = "  ".join(f"{n}={s:.3f}" for n, s in top_candidates)
+                    status = "✓" if name != UNKNOWN_LABEL else "?"
+                    print(f"[D] {ts} {status} best={name} score={score:.3f}  [{cands}]  thresh={RECOGNITION_THRESHOLD}")
 
                 if name != UNKNOWN_LABEL:
                     confirm_streak[name] = confirm_streak.get(name, 0) + 1
@@ -511,9 +525,6 @@ def main():
 
             if current_names != last_debug_names:
                 if current_names:
-                    if DEBUG:
-                        ts = time.strftime("%H:%M:%S")
-                        print(f"[D] {ts} кадр {frame_count}: {sorted(current_names)}")
                     _web_add_event(list(current_names), frame)
                 elif DEBUG:
                     ts = time.strftime("%H:%M:%S")
@@ -525,10 +536,11 @@ def main():
                 print(f"[D] {ts} кадр {frame_count}: лиц не обнаружено")
                 last_heartbeat[0] = time.time()
 
-        for bbox, name in detected:
+        for bbox, name, score in detected:
             x1, y1, x2, y2 = map(int, bbox)
             color = (0, 200, 0) if name != UNKNOWN_LABEL else (0, 0, 200)
-            draw_box(frame, x1, y1, x2, y2, name, color)
+            label = f"{name} {score:.2f}"
+            draw_box(frame, x1, y1, x2, y2, label, color)
 
         if WEB_PORT:
             with _latest_frame_lock:
