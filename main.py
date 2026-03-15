@@ -8,6 +8,7 @@
 import json
 import math
 import os
+import queue
 import sys
 import time
 import subprocess
@@ -29,6 +30,7 @@ CAMERA_INDEX          = 0
 GREET_COOLDOWN        = 10    # секунд между приветствиями одного человека
 PROCESS_EVERY_N       = 1     # обрабатывать каждый N-й кадр
 CONFIRM_FRAMES        = 3     # сколько кадров подряд нужно видеть человека перед приветствием
+SCORE_WINDOW          = 7     # усреднение скора за последние N кадров (сглаживание)
 SHOW_DISPLAY          = False # показывать окно (требует X-сервер/дисплей)
 DEBUG                 = True  # подробный вывод в консоль
 DEBUG_INTERVAL        = 5.0   # секунд между пульсом (если нет детекций)
@@ -371,11 +373,13 @@ def _decode_scrfd(outputs, scale, pad):
 
 # ── Обёртки RKNN моделей ─────────────────────────────────────────────────────
 class _RKNNModel:
-    def __init__(self, path):
+    # core_mask: 0=auto, 1=Core0, 2=Core1, 4=Core2, 3=Core0+1, 7=все три
+    def __init__(self, path, core_mask=None):
         self.net = RKNNLite()
         if self.net.load_rknn(path) != 0:
             raise RuntimeError(f"Не удалось загрузить модель: {path}")
-        if self.net.init_runtime() != 0:
+        kwargs = {} if core_mask is None else {"core_mask": core_mask}
+        if self.net.init_runtime(**kwargs) != 0:
             raise RuntimeError("Ошибка инициализации RKNN runtime")
 
     def _run(self, inputs):
@@ -386,9 +390,9 @@ class _RKNNModel:
 
 
 class FaceDetector(_RKNNModel):
-    def __init__(self, path):
+    def __init__(self, path, core_mask=None):
         global _SCRFD_INPUT, _ANCHORS
-        super().__init__(path)
+        super().__init__(path, core_mask=core_mask)
         # Определяем размер входа перебором стандартных размеров
         for candidate in [640, 480, 360, 320]:
             probe = np.zeros((1, candidate, candidate, 3), dtype=np.uint8)
@@ -496,8 +500,9 @@ def main():
         threading.Thread(target=_frame_writer, daemon=True).start()
 
     print("[*] Инициализация NPU моделей...")
-    detector = FaceDetector(SCRFD_MODEL)
-    encoder  = FaceEncoder(ARCFACE_MODEL)
+    # SCRFD → Core0, ArcFace → Core1: работают параллельно на разных ядрах NPU
+    detector = FaceDetector(SCRFD_MODEL,  core_mask=1)  # NPU Core0
+    encoder  = FaceEncoder(ARCFACE_MODEL, core_mask=2)  # NPU Core1
 
     print("[*] Загрузка базы лиц...")
     known_encodings, known_names = load_known_faces(KNOWN_FACES_DIR, detector, encoder)
@@ -514,14 +519,79 @@ def main():
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
+    # ── Асинхронный пайплайн кодирования ────────────────────────────────────
+    # Пока детектор обрабатывает кадр N на Core0,
+    # энкодер параллельно кодирует лица из кадра N-1 на Core1.
+    _enc_in:  queue.Queue = queue.Queue(maxsize=2)
+    _enc_out: queue.Queue = queue.Queue(maxsize=2)
+
+    def _encode_loop():
+        # История сырых скоров для каждого кандидата — сглаживание по времени
+        score_hist: dict = {}
+
+        while True:
+            item = _enc_in.get()
+            if item is None:
+                break
+            frm, raw_faces = item
+            results = []
+
+            for bbox, kps in raw_faces:
+                frontal, offset = _is_frontal(kps)
+                if not frontal:
+                    if DEBUG:
+                        ts = time.strftime("%H:%M:%S")
+                        print(f"[D] {ts} пропуск: боковой профиль offset={offset:.3f} (thresh={_FRONTAL_THRESH})")
+                    continue
+
+                enc, aligned = encoder.encode(frm, kps)
+                if enc is None:
+                    results.append((bbox, UNKNOWN_LABEL, 0.0))
+                    continue
+
+                _, _, top = identify_face(enc, known_encodings, known_names)
+
+                if top:
+                    best_cand, best_raw = top[0]
+                    hist = score_hist.setdefault(best_cand, deque(maxlen=SCORE_WINDOW))
+                    hist.append(best_raw)
+                    avg = float(np.mean(hist))
+                    name  = best_cand if avg >= RECOGNITION_THRESHOLD else UNKNOWN_LABEL
+                    score = avg
+                else:
+                    name, score = UNKNOWN_LABEL, 0.0
+
+                if DEBUG:
+                    ts = time.strftime("%H:%M:%S")
+                    cands = "  ".join(f"{n}={s:.3f}" for n, s in top)
+                    status = "✓" if name != UNKNOWN_LABEL else "?"
+                    n_hist = len(score_hist.get(top[0][0], [])) if top else 0
+                    print(f"[D] {ts} {status} best={name} score(avg{n_hist})={score:.3f}  "
+                          f"offset={offset:.3f}  [{cands}]  thresh={RECOGNITION_THRESHOLD}")
+                    if aligned is not None and WEB_PORT:
+                        try:
+                            debug_path = os.path.join(WEB_DIR, "aligned_last.jpg")
+                            ok, buf = cv2.imencode(".jpg", aligned)
+                            if ok:
+                                _write_file(debug_path, buf.tobytes())
+                        except OSError:
+                            pass
+
+                results.append((bbox, name, score))
+
+            _enc_out.put(results)
+
+    enc_thread = threading.Thread(target=_encode_loop, daemon=True)
+    enc_thread.start()
     print("[*] Запуск. Нажми Q для выхода.")
-    last_greeted: dict[str, float] = {}
-    confirm_streak: dict[str, int] = {}  # сколько кадров подряд видим человека
+
+    last_greeted: dict = {}
+    confirm_streak: dict = {}
     last_heartbeat = [0.0]
-    last_debug_names: set[str] = set()
-    last_event_time: dict[frozenset, float] = {}  # кулдаун веб-событий
+    last_debug_names: set = set()
+    last_event_time: dict = {}
     frame_count = 0
-    detected: list[tuple] = []
+    detected: list = []
 
     while True:
         ret, frame = cap.read()
@@ -533,54 +603,37 @@ def main():
         frame_count += 1
 
         if frame_count % PROCESS_EVERY_N == 0:
-            detected = []
             faces = detector.detect(frame)
+            # Отправляем детекции в очередь кодировщика (Core1 обработает параллельно)
+            try:
+                _enc_in.put_nowait((frame.copy(), faces))
+            except queue.Full:
+                pass  # кодировщик ещё занят — пропускаем кадр
 
-            current_names: set[str] = set()
-            for bbox, kps in faces:
-                frontal, frontal_offset = _is_frontal(kps)
-                if not frontal:
-                    if DEBUG:
-                        ts = time.strftime("%H:%M:%S")
-                        print(f"[D] {ts} пропуск: боковой профиль offset={frontal_offset:.3f} (thresh={_FRONTAL_THRESH})")
-                    continue
-                enc, aligned = encoder.encode(frame, kps)
-                if enc is not None:
-                    name, score, top_candidates = identify_face(enc, known_encodings, known_names)
-                else:
-                    name, score, top_candidates = UNKNOWN_LABEL, 0.0, []
-                    aligned = None
+        # Забираем готовые результаты от кодировщика (не блокируем основной поток)
+        try:
+            face_results: list = _enc_out.get_nowait()
+        except queue.Empty:
+            face_results = None
+
+        if face_results is not None:
+            detected = face_results
+            current_names: set = set()
+
+            for bbox, name, score in face_results:
                 if name == UNKNOWN_LABEL:
                     continue
-                detected.append((bbox, name, score))
                 current_names.add(name)
-
+                confirm_streak[name] = confirm_streak.get(name, 0) + 1
                 if DEBUG:
-                    ts = time.strftime("%H:%M:%S")
-                    cands = "  ".join(f"{n}={s:.3f}" for n, s in top_candidates)
-                    status = "✓" if name != UNKNOWN_LABEL else "?"
-                    print(f"[D] {ts} {status} best={name} score={score:.3f}  offset={frontal_offset:.3f}  [{cands}]  thresh={RECOGNITION_THRESHOLD}")
-                    # Сохраняем выровненное лицо для ручной проверки
-                    if aligned is not None and WEB_PORT:
-                        try:
-                            debug_path = os.path.join(WEB_DIR, "aligned_last.jpg")
-                            ok, buf = cv2.imencode(".jpg", aligned)
-                            if ok:
-                                _write_file(debug_path, buf.tobytes())
-                        except OSError:
-                            pass
-
-                if name != UNKNOWN_LABEL:
-                    confirm_streak[name] = confirm_streak.get(name, 0) + 1
-                    if DEBUG:
-                        print(f"[D]   streak={confirm_streak[name]}/{CONFIRM_FRAMES}")
-                    if confirm_streak[name] >= CONFIRM_FRAMES:
-                        now = time.time()
-                        if now - last_greeted.get(name, 0) > GREET_COOLDOWN:
-                            last_greeted[name] = now
-                            greeting = GREETINGS[LANG].format(name)
-                            print(f"[>] {greeting}")
-                            speak(greeting)
+                    print(f"[D]   streak={confirm_streak[name]}/{CONFIRM_FRAMES}")
+                if confirm_streak[name] >= CONFIRM_FRAMES:
+                    now = time.time()
+                    if now - last_greeted.get(name, 0) > GREET_COOLDOWN:
+                        last_greeted[name] = now
+                        greeting = GREETINGS[LANG].format(name)
+                        print(f"[>] {greeting}")
+                        speak(greeting)
 
             # Сбрасываем стрик для тех, кого нет в текущем кадре
             for gone in set(confirm_streak) - current_names - {UNKNOWN_LABEL}:
@@ -618,6 +671,8 @@ def main():
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
 
+    _enc_in.put(None)  # сигнал завершения энкодеру
+    enc_thread.join(timeout=2)
     cap.release()
     if SHOW_DISPLAY:
         cv2.destroyAllWindows()
