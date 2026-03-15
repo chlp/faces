@@ -622,7 +622,7 @@ def main():
     last_greeted: dict = {}
     confirm_streak: dict = {}
     last_heartbeat = [0.0]
-    last_debug_names: set = set()
+    last_debug_state: tuple = (frozenset(), 0)  # (known_names, unknown_count)
     last_event_time: dict = {}
     frame_count = 0
     detected: list = []
@@ -653,9 +653,11 @@ def main():
         if face_results is not None:
             detected = face_results
             current_names: set = set()
+            unknown_count = 0
 
             for bbox, name, score in face_results:
                 if name == UNKNOWN_LABEL:
+                    unknown_count += 1
                     continue
                 current_names.add(name)
                 confirm_streak[name] = confirm_streak.get(name, 0) + 1
@@ -673,21 +675,23 @@ def main():
             for gone in set(confirm_streak) - current_names - {UNKNOWN_LABEL}:
                 confirm_streak[gone] = 0
 
-            if current_names != last_debug_names:
-                if current_names:
-                    key = frozenset(current_names)
+            current_state = (frozenset(current_names), unknown_count)
+            if current_state != last_debug_state:
+                web_names = list(current_names) + [UNKNOWN_LABEL] * unknown_count
+                if web_names:
+                    key = current_state
                     now = time.time()
                     if now - last_event_time.get(key, 0) >= WEB_EVENT_COOLDOWN:
                         last_event_time[key] = now
                         snap = frame.copy()
                         _draw_faces(snap, detected)
-                        _web_add_event(list(current_names), snap)
+                        _web_add_event(web_names, snap)
                 elif DEBUG:
                     ts = time.strftime("%H:%M:%S")
                     print(f"[D] {ts} кадр {frame_count}: лиц не обнаружено")
-                last_debug_names = current_names
+                last_debug_state = current_state
                 last_heartbeat[0] = time.time()
-            elif DEBUG and not current_names and time.time() - last_heartbeat[0] >= DEBUG_INTERVAL:
+            elif DEBUG and not current_names and not unknown_count and time.time() - last_heartbeat[0] >= DEBUG_INTERVAL:
                 ts = time.strftime("%H:%M:%S")
                 print(f"[D] {ts} кадр {frame_count}: лиц не обнаружено")
                 last_heartbeat[0] = time.time()
