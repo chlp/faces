@@ -55,7 +55,7 @@ _STRIDES      = [8, 16, 32]
 _NUM_ANCHORS  = 2
 _SCORE_THRESH  = 0.50
 _NMS_THRESH    = 0.40
-_FRONTAL_THRESH = 0.35  # макс. смещение носа от центра глаз (доля расстояния между глазами)
+_FRONTAL_THRESH = 0.20  # макс. смещение носа от центра глаз (доля расстояния между глазами)
 
 # Шаблон ключевых точек лица для выравнивания 112×112 (стандарт ArcFace/InsightFace)
 _ARCFACE_TPL = np.array([
@@ -255,18 +255,18 @@ def draw_box(frame, x1, y1, x2, y2, name, color):
 
 
 # ── SCRFD постобработка ──────────────────────────────────────────────────────
-def _is_frontal(kps) -> bool:
-    """Возвращает True если лицо смотрит примерно прямо.
+def _is_frontal(kps) -> tuple:
+    """Возвращает (is_frontal: bool, offset: float).
     kps: (5, 2) — [left_eye, right_eye, nose, left_mouth, right_mouth]
     Проверяем, что нос находится симметрично между глазами по горизонтали.
     """
     left_eye, right_eye, nose = kps[0], kps[1], kps[2]
     eye_dist = abs(right_eye[0] - left_eye[0])
     if eye_dist < 1:
-        return False
+        return False, 1.0
     eye_center_x = (left_eye[0] + right_eye[0]) / 2
     offset = abs(nose[0] - eye_center_x) / eye_dist
-    return offset < _FRONTAL_THRESH
+    return offset < _FRONTAL_THRESH, offset
 
 
 def _decode_scrfd(outputs, scale, pad):
@@ -369,15 +369,16 @@ class FaceDetector(_RKNNModel):
 
 class FaceEncoder(_RKNNModel):
     def encode(self, frame, kps):
-        """Выравнивает лицо по 5 точкам, возвращает L2-норм. эмбеддинг (512,) или None."""
+        """Выравнивает лицо по 5 точкам, возвращает (L2-норм. эмбеддинг (512,), aligned_img) или (None, None)."""
         M, _ = cv2.estimateAffinePartial2D(kps, _ARCFACE_TPL, method=cv2.LMEDS)
         if M is None:
-            return None
+            return None, None
         aligned = cv2.warpAffine(frame, M, (112, 112), borderValue=0.0)
         inp = cv2.cvtColor(aligned, cv2.COLOR_BGR2RGB)   # uint8 RGB, NHWC
         emb = self._run([inp[np.newaxis]])[0].flatten()
         norm = np.linalg.norm(emb)
-        return emb / norm if norm > 0 else None
+        enc = emb / norm if norm > 0 else None
+        return enc, aligned
 
 
 # ── База лиц ─────────────────────────────────────────────────────────────────
@@ -407,7 +408,7 @@ def load_known_faces(directory, detector: FaceDetector, encoder: FaceEncoder):
             # Берём наибольшее лицо на фото
             bbox, kps = max(detections,
                             key=lambda d: (d[0][2] - d[0][0]) * (d[0][3] - d[0][1]))
-            enc = encoder.encode(img, kps)
+            enc, _ = encoder.encode(img, kps)
             if enc is None:
                 continue
             encodings.append(enc)
@@ -497,13 +498,18 @@ def main():
             for gone in set(confirm_streak) - {UNKNOWN_LABEL}:
                 confirm_streak[gone] = 0
             for bbox, kps in faces:
-                if not _is_frontal(kps):
+                frontal, frontal_offset = _is_frontal(kps)
+                if not frontal:
+                    if DEBUG:
+                        ts = time.strftime("%H:%M:%S")
+                        print(f"[D] {ts} пропуск: боковой профиль offset={frontal_offset:.3f} (thresh={_FRONTAL_THRESH})")
                     continue
-                enc = encoder.encode(frame, kps)
+                enc, aligned = encoder.encode(frame, kps)
                 if enc is not None:
                     name, score, top_candidates = identify_face(enc, known_encodings, known_names)
                 else:
                     name, score, top_candidates = UNKNOWN_LABEL, 0.0, []
+                    aligned = None
                 detected.append((bbox, name, score))
                 current_names.add(name)
 
@@ -511,7 +517,16 @@ def main():
                     ts = time.strftime("%H:%M:%S")
                     cands = "  ".join(f"{n}={s:.3f}" for n, s in top_candidates)
                     status = "✓" if name != UNKNOWN_LABEL else "?"
-                    print(f"[D] {ts} {status} best={name} score={score:.3f}  [{cands}]  thresh={RECOGNITION_THRESHOLD}")
+                    print(f"[D] {ts} {status} best={name} score={score:.3f}  offset={frontal_offset:.3f}  [{cands}]  thresh={RECOGNITION_THRESHOLD}")
+                    # Сохраняем выровненное лицо для ручной проверки
+                    if aligned is not None and WEB_PORT:
+                        try:
+                            debug_path = os.path.join(WEB_DIR, "aligned_last.jpg")
+                            ok, buf = cv2.imencode(".jpg", aligned)
+                            if ok:
+                                _write_file(debug_path, buf.tobytes())
+                        except OSError:
+                            pass
 
                 if name != UNKNOWN_LABEL:
                     confirm_streak[name] = confirm_streak.get(name, 0) + 1
