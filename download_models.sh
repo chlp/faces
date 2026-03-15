@@ -8,12 +8,15 @@ mkdir -p models
 
 echo "=== Клонирование rknn_model_zoo (sparse, только модели) ==="
 TMP=$(mktemp -d)
-git clone --depth=1 --filter=blob:none --sparse "$REPO" "$TMP"
+# --filter=blob:none без явного checkout не скачивает бинарники, поэтому используем обычный sparse clone
+git clone --depth=1 --sparse "$REPO" "$TMP"
 (
     cd "$TMP"
     git sparse-checkout set \
         examples/SCRFD/model \
         examples/mobilefacenet/model
+    # явный checkout форсирует скачивание файлов в рабочее дерево
+    git checkout
 )
 
 # Ищем файлы для RK3588: предпочитаем scrfd_10g, fallback на scrfd_2.5g
