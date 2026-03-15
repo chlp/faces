@@ -23,6 +23,7 @@ KNOWN_FACES_DIR       = "known_faces"
 CAMERA_INDEX          = 0
 GREET_COOLDOWN        = 10    # секунд между приветствиями одного человека
 PROCESS_EVERY_N       = 2     # обрабатывать каждый N-й кадр
+SHOW_DISPLAY          = False # показывать окно (требует X-сервер/дисплей)
 
 # Порог распознавания — косинусное сходство (0..1, выше = строже)
 RECOGNITION_THRESHOLD = 0.40
@@ -111,10 +112,11 @@ def _decode_scrfd(outputs, scale, pad):
     pad_w, pad_h = pad
     all_boxes, all_scores, all_kps = [], [], []
 
+    n = len(_STRIDES)
     for i, stride in enumerate(_STRIDES):
-        scores = outputs[i * 3 + 0].flatten()
-        bboxes = outputs[i * 3 + 1].reshape(-1, 4)
-        kps    = outputs[i * 3 + 2].reshape(-1, 10)
+        scores = outputs[i + 0].flatten()
+        bboxes = outputs[i + n].reshape(-1, 4)
+        kps    = outputs[i + n * 2].reshape(-1, 10)
         ac     = _ANCHORS[stride]
 
         # Декодирование bbox: дистанции (left,top,right,bottom) от центра якоря
