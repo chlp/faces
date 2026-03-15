@@ -43,12 +43,26 @@ else
     echo "       source venv/bin/activate && pip install rknn_toolkit_lite2-*.whl"
 fi
 
+echo "=== Обновление librknnrt ==="
+# Библиотека в системе может быть старой (несовместима с моделями toolkit2 2.3.x).
+# Скачиваем актуальную версию от Rockchip напрямую.
+LIBRKNN_URL="https://raw.githubusercontent.com/airockchip/rknn-toolkit2/master/rknpu2/runtime/Linux/librknn_api/aarch64/librknnrt.so"
+if wget -q --spider "$LIBRKNN_URL" 2>/dev/null; then
+    wget -q -O /tmp/librknnrt.so "$LIBRKNN_URL"
+    sudo cp /tmp/librknnrt.so /usr/lib/librknnrt.so
+    sudo ldconfig
+    echo "[+] librknnrt обновлён"
+else
+    echo "[!] Не удалось скачать librknnrt (нет сети?). Пропускаем."
+fi
+
 echo "=== Создание папок ==="
 mkdir -p known_faces models
 
 echo ""
-echo "Следующий шаг — скачать RKNN модели:"
-echo "  bash download_models.sh"
+echo "Следующий шаг — скопировать модели в models/:"
+echo "  models/scrfd.rknn и models/arcface.rknn"
+echo "  (сконвертируй на Mac: bash convert/run.sh, затем scp)"
 echo ""
 echo "Запуск:"
 echo "  source venv/bin/activate"
