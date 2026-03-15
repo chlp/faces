@@ -39,6 +39,7 @@ DETECTIONS_FILE       = WEB_DIR + "/detections.json"
 SNAPSHOTS_DIR         = WEB_DIR + "/snap"
 SNAPSHOTS_MAX         = 10
 FRAME_INTERVAL        = 1.0
+WEB_EVENT_COOLDOWN    = 60.0  # секунд: не повторять событие для тех же людей
 
 # Порог распознавания — косинусное сходство (0..1, выше = строже)
 RECOGNITION_THRESHOLD = 0.55
@@ -106,14 +107,13 @@ header span{font-size:.8rem;font-weight:600;color:#555;letter-spacing:.08em;text
 #cam-wrap{background:#1c1c1e;border-radius:12px;overflow:hidden;flex-shrink:0;width:240px;
   display:flex;align-items:center;justify-content:center}
 #cam{width:100%;height:100%;object-fit:contain;display:block}
-#feed-wrap{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:6px}
-.card{background:#1c1c1e;border-radius:10px;padding:8px 10px;
-  display:flex;align-items:center;gap:10px;flex-shrink:0}
-.thumb{width:56px;height:42px;border-radius:6px;object-fit:cover;flex-shrink:0;background:#111}
-.info{flex:1;min-width:0}
-.names{font-size:.9rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#feed-wrap{flex:1;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;align-content:start}
+.card{background:#1c1c1e;border-radius:10px;overflow:hidden;display:flex;flex-direction:column}
+.thumb{width:100%;aspect-ratio:4/3;object-fit:cover;display:block;background:#111}
+.info{padding:6px 8px}
+.names{font-size:.8rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .names.k{color:#30d158}.names.u{color:#ff453a}
-.ts{font-size:.7rem;color:#555;margin-top:2px}
+.ts{font-size:.65rem;color:#555;margin-top:2px}
 #empty{color:#333;font-size:.85rem;margin:auto;text-align:center}
 </style></head><body>
 <header><span id="dot"></span><span>Камера</span></header>
@@ -142,8 +142,7 @@ function rebuild(evs){
     const d=document.createElement('div');
     d.className='card';d.dataset.ts=ev.ts;
     d.innerHTML=`<img class="thumb" src="snap/${ev.img}.jpg?t=${ev.ts}" loading="lazy">
-    <div class="info"><div class="names ${hasKnown?'k':'u'}">${label}</div>
-    <div class="ts">${fmt(ev.ts)}</div></div>`;
+    <div class="info"><div class="names ${hasKnown?'k':'u'}">${label}</div><div class="ts">${fmt(ev.ts)}</div></div>`;
     feed.appendChild(d);
   });
 }
@@ -477,6 +476,7 @@ def main():
     confirm_streak: dict[str, int] = {}  # сколько кадров подряд видим человека
     last_heartbeat = [0.0]
     last_debug_names: set[str] = set()
+    last_event_time: dict[frozenset, float] = {}  # кулдаун веб-событий
     frame_count = 0
     detected: list[tuple] = []
 
@@ -540,7 +540,11 @@ def main():
 
             if current_names != last_debug_names:
                 if current_names:
-                    _web_add_event(list(current_names), frame)
+                    key = frozenset(current_names)
+                    now = time.time()
+                    if now - last_event_time.get(key, 0) >= WEB_EVENT_COOLDOWN:
+                        last_event_time[key] = now
+                        _web_add_event(list(current_names), frame)
                 elif DEBUG:
                     ts = time.strftime("%H:%M:%S")
                     print(f"[D] {ts} кадр {frame_count}: лиц не обнаружено")
