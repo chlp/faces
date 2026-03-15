@@ -51,7 +51,7 @@ ESPEAK_ARGS   = {"ru": ["-v", "ru", "-s", "140"], "en": ["-v", "en"]}
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
 
 # ── SCRFD внутренние параметры ───────────────────────────────────────────────
-_SCRFD_INPUT  = 360   # будет переопределён автоматически после загрузки модели
+_SCRFD_INPUT  = 640   # будет переопределён автоматически после загрузки модели
 _STRIDES      = [8, 16, 32]
 _NUM_ANCHORS  = 2
 _SCORE_THRESH  = 0.50
@@ -389,16 +389,18 @@ class FaceDetector(_RKNNModel):
     def __init__(self, path):
         global _SCRFD_INPUT, _ANCHORS
         super().__init__(path)
-        # Определяем размер входа по первому выводу модели (stride=8 → N = (size/8)^2 * 2)
-        probe = np.zeros((1, _SCRFD_INPUT, _SCRFD_INPUT, 3), dtype=np.uint8)
-        outs = self._run([probe])
-        n0 = outs[0].size  # score тензор stride=8: (size/8)^2 * 2
-        # решаем: size/8 = sqrt(n0/2)  →  size = 8 * sqrt(n0/2)
-        inferred = int(round(8 * math.sqrt(n0 / 2)))
-        if inferred != _SCRFD_INPUT:
-            print(f"[*] SCRFD input: модель {inferred}×{inferred}, код был {_SCRFD_INPUT}×{_SCRFD_INPUT} — исправляю")
-            _SCRFD_INPUT = inferred
-            _ANCHORS = _build_anchor_centers()
+        # Определяем размер входа перебором стандартных размеров
+        for candidate in [640, 480, 360, 320]:
+            probe = np.zeros((1, candidate, candidate, 3), dtype=np.uint8)
+            outs = self._run([probe])
+            if outs is not None:
+                if candidate != _SCRFD_INPUT:
+                    print(f"[*] SCRFD input: модель {candidate}×{candidate}, код был {_SCRFD_INPUT}×{_SCRFD_INPUT} — исправляю")
+                    _SCRFD_INPUT = candidate
+                    _ANCHORS = _build_anchor_centers()
+                break
+        else:
+            raise RuntimeError("Не удалось определить размер входа SCRFD — ни один из кандидатов не подошёл")
 
     def detect(self, frame):
         """Возвращает list[(bbox: ndarray[4], kps: ndarray[5,2])]."""
