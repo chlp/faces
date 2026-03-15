@@ -259,14 +259,16 @@ def _decode_scrfd(outputs, scale, pad):
       outputs[i*3+2] — kps    (N, 10) — смещения xy для 5 точек в единицах stride
     Если модель возвращает другой порядок — поправь _STRIDES или переставь индексы.
     """
+    if DEBUG:
+        print(f"[D] SCRFD outputs: {len(outputs)} тензоров, формы: {[o.shape for o in outputs]}")
+
     pad_w, pad_h = pad
     all_boxes, all_scores, all_kps = [], [], []
 
-    n = len(_STRIDES)
     for i, stride in enumerate(_STRIDES):
-        scores = outputs[i + 0].flatten()
-        bboxes = outputs[i + n].reshape(-1, 4)
-        kps    = outputs[i + n * 2].reshape(-1, 10)
+        scores = outputs[i * 3 + 0].flatten()
+        bboxes = outputs[i * 3 + 1].reshape(-1, 4)
+        kps    = outputs[i * 3 + 2].reshape(-1, 10)
         ac     = _ANCHORS[stride]
 
         # Декодирование bbox: дистанции (left,top,right,bottom) от центра якоря
