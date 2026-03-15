@@ -8,12 +8,12 @@
 import json
 import math
 import os
-import queue
 import time
 import subprocess
 import threading
 from collections import deque
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import ThreadingMixIn
 from pathlib import Path
 
 import cv2
@@ -34,9 +34,11 @@ SHOW_DISPLAY          = False # показывать окно (требует X-
 DEBUG                 = True  # подробный вывод в консоль
 DEBUG_INTERVAL        = 5.0   # секунд между пульсом (если нет детекций)
 WEB_PORT              = 8080  # порт веб-интерфейса (0 = выключен)
-FRAME_FILE            = "/tmp/faces_frame.jpg"   # файл текущего кадра
-DETECTIONS_FILE       = "/tmp/faces_detections.json"  # файл событий обнаружения
-FRAME_INTERVAL        = 1.0  # секунд между сохранением кадра
+FRAME_FILE            = "/tmp/faces_frame.jpg"
+DETECTIONS_FILE       = "/tmp/faces_detections.json"
+SNAPSHOTS_DIR         = "/tmp/faces_snapshots"
+SNAPSHOTS_MAX         = 10
+FRAME_INTERVAL        = 1.0
 
 # Порог распознавания — косинусное сходство (0..1, выше = строже)
 RECOGNITION_THRESHOLD = 0.55
@@ -78,12 +80,11 @@ def _build_anchor_centers():
 _ANCHORS = _build_anchor_centers()
 
 
-# ── Веб-интерфейс (SSE) ──────────────────────────────────────────────────────
-_detection_log: deque = deque(maxlen=10)
-_sse_clients: list    = []
-_sse_lock             = threading.Lock()
-_latest_frame_bgr     = None
-_latest_frame_lock    = threading.Lock()
+# ── Веб-интерфейс ────────────────────────────────────────────────────────────
+_detection_log: deque  = deque(maxlen=SNAPSHOTS_MAX)
+_snapshot_counter: int = 0
+_latest_frame_bgr      = None
+_latest_frame_lock     = threading.Lock()
 
 _HTML = """<!DOCTYPE html>
 <html lang="ru"><head>
@@ -97,100 +98,101 @@ body{background:#0f0f0f;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFo
   display:flex;flex-direction:column;height:100%;
   padding:12px;padding-top:max(12px,env(safe-area-inset-top));gap:10px}
 header{display:flex;align-items:center;gap:8px;flex-shrink:0}
-#dot{width:8px;height:8px;border-radius:50%;background:#333;transition:background .3s}
+#dot{width:8px;height:8px;border-radius:50%;background:#555;transition:background .3s}
 #dot.live{background:#30d158}
 header span{font-size:.8rem;font-weight:600;color:#555;letter-spacing:.08em;text-transform:uppercase}
 #main{display:flex;gap:10px;flex:1;min-height:0}
 #cam-wrap{background:#1c1c1e;border-radius:12px;overflow:hidden;flex-shrink:0;width:240px;
   display:flex;align-items:center;justify-content:center}
 #cam{width:100%;height:100%;object-fit:contain;display:block}
-#cam-placeholder{color:#444;font-size:.8rem}
 #feed-wrap{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:6px}
-.card{background:#1c1c1e;border-radius:10px;padding:9px 12px;
-  display:flex;align-items:center;gap:10px;animation:in .2s ease;flex-shrink:0}
-@keyframes in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
-.ico{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;
-  justify-content:center;font-size:1rem;flex-shrink:0}
-.ico.k{background:#0d2a1a}.ico.u{background:#2a0d0d}
+.card{background:#1c1c1e;border-radius:10px;padding:8px 10px;
+  display:flex;align-items:center;gap:10px;flex-shrink:0}
+.thumb{width:56px;height:42px;border-radius:6px;object-fit:cover;flex-shrink:0;background:#111}
 .info{flex:1;min-width:0}
-.names{font-size:.95rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.names{font-size:.9rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .names.k{color:#30d158}.names.u{color:#ff453a}
-.ts{font-size:.72rem;color:#555;margin-top:2px}
-.badge{background:#2c2c2e;border-radius:8px;padding:2px 8px;font-size:.75rem;color:#888;flex-shrink:0}
+.ts{font-size:.7rem;color:#555;margin-top:2px}
 #empty{color:#333;font-size:.85rem;margin:auto;text-align:center}
 </style></head><body>
 <header><span id="dot"></span><span>Камера</span></header>
 <div id="main">
-  <div id="cam-wrap">
-    <img id="cam" alt="" onerror="this.style.display='none';document.getElementById('cam-placeholder').style.display=''">
-    <span id="cam-placeholder" style="display:none">Нет кадра</span>
-  </div>
+  <div id="cam-wrap"><img id="cam" alt=""></div>
   <div id="feed-wrap"><p id="empty">Ожидание...</p></div>
 </div>
 <script>
 const feed=document.getElementById('feed-wrap'),dot=document.getElementById('dot');
+let lastTs=0;
 function fmt(ts){
-  const d=new Date(ts*1000),s=(Date.now()-ts*1000)/1000;
+  const s=(Date.now()-ts*1000)/1000;
   if(s<60)return'только что';
   if(s<3600)return Math.floor(s/60)+'\u00a0мин назад';
-  return d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
+  return new Date(ts*1000).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
 }
-function card(ev){
-  const kn=ev.names.filter(n=>n!=='Незнакомец');
-  const un=ev.names.filter(n=>n==='Незнакомец').length;
-  const hasKnown=kn.length>0;
-  let label=kn.join(', ');
-  if(un>0)label+=(label?'\u00a0+\u00a0':'')+
-    (un===1?'Незнакомец':un+'\u00a0незн.');
-  const d=document.createElement('div');
-  d.className='card';d.dataset.ts=ev.ts;
-  d.innerHTML=`<div class="ico ${hasKnown?'k':'u'}">${hasKnown?'&#x1F464;':'&#x2753;'}</div>
-  <div class="info"><div class="names ${hasKnown?'k':'u'}">${label}</div>
-  <div class="ts">${fmt(ev.ts)}</div></div>
-  ${ev.names.length>1?`<div class="badge">${ev.names.length}</div>`:''}`;
-  return d;
+function rebuild(evs){
+  feed.innerHTML='';
+  if(!evs.length){feed.innerHTML='<p id="empty">Ожидание...</p>';return;}
+  evs.slice().reverse().forEach(ev=>{
+    const kn=ev.names.filter(n=>n!=='Незнакомец');
+    const un=ev.names.filter(n=>n==='Незнакомец').length;
+    const hasKnown=kn.length>0;
+    let label=kn.join(', ');
+    if(un>0)label+=(label?'\u00a0+\u00a0':'')+(un===1?'Незнакомец':un+'\u00a0незн.');
+    const d=document.createElement('div');
+    d.className='card';d.dataset.ts=ev.ts;
+    d.innerHTML=`<img class="thumb" src="/snap/${ev.img}.jpg?t=${ev.ts}" loading="lazy">
+    <div class="info"><div class="names ${hasKnown?'k':'u'}">${label}</div>
+    <div class="ts">${fmt(ev.ts)}</div></div>`;
+    feed.appendChild(d);
+  });
 }
-function push(ev){
-  const e=document.getElementById('empty');if(e)e.remove();
-  feed.insertBefore(card(ev),feed.firstChild);
-  while(feed.children.length>10)feed.removeChild(feed.lastChild);
+function poll(){
+  fetch('/detections.json').then(r=>r.json()).then(evs=>{
+    dot.className='live';
+    const newTs=evs.length?evs[evs.length-1].ts:0;
+    if(newTs!==lastTs){lastTs=newTs;rebuild(evs);}
+  }).catch(()=>dot.className='');
 }
 setInterval(()=>feed.querySelectorAll('.card').forEach(c=>{
   c.querySelector('.ts').textContent=fmt(+c.dataset.ts);}),15000);
-fetch('/state').then(r=>r.json()).then(evs=>evs.forEach(push));
-const camImg=document.getElementById('cam');
-function refreshFrame(){
-  camImg.style.display='';
-  camImg.src='/frame?t='+Date.now();
-}
-refreshFrame();
-setInterval(refreshFrame,1000);
-function connect(){
-  const es=new EventSource('/events');
-  es.onopen=()=>dot.className='live';
-  es.onmessage=e=>push(JSON.parse(e.data));
-  es.onerror=()=>{dot.className='';es.close();setTimeout(connect,3000);};
-}
-connect();
+poll();setInterval(poll,1000);
+const cam=document.getElementById('cam');
+setInterval(()=>{cam.src='/frame?t='+Date.now();},1000);
+cam.src='/frame?t=0';
 </script></body></html>
 """
 
-def _web_add_event(names: list):
-    ev = {"ts": round(time.time(), 2), "names": sorted(names)}
-    _detection_log.append(ev)
-    # Атомарно пишем в файл
+def _write_file(path: str, data: bytes):
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, path)
+
+
+def _web_add_event(names: list, frame):
+    global _snapshot_counter
+    slot = _snapshot_counter % SNAPSHOTS_MAX
+    _snapshot_counter += 1
+
+    # Сохраняем снапшот кадра
     try:
-        tmp = DETECTIONS_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(list(_detection_log), f, ensure_ascii=False)
-        os.replace(tmp, DETECTIONS_FILE)
+        os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
+        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        if ok:
+            _write_file(os.path.join(SNAPSHOTS_DIR, f"{slot}.jpg"), buf.tobytes())
     except OSError:
         pass
-    msg = ("data: " + json.dumps(ev, ensure_ascii=False) + "\n\n").encode()
-    with _sse_lock:
-        dead = [q for q in _sse_clients if not _try_put(q, msg)]
-        for q in dead:
-            _sse_clients.remove(q)
+
+    ev = {"ts": round(time.time(), 2), "names": sorted(names), "img": slot}
+    _detection_log.append(ev)
+
+    # Сохраняем список обнаружений
+    try:
+        body = json.dumps(list(_detection_log), ensure_ascii=False).encode()
+        _write_file(DETECTIONS_FILE, body)
+    except OSError:
+        pass
+
 
 def _frame_writer():
     """Фоновый поток: раз в FRAME_INTERVAL секунд сохраняет текущий кадр в файл."""
@@ -203,81 +205,56 @@ def _frame_writer():
         try:
             ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
             if ok:
-                tmp = FRAME_FILE + ".tmp"
-                with open(tmp, "wb") as f:
-                    f.write(buf.tobytes())
-                os.replace(tmp, FRAME_FILE)
+                _write_file(FRAME_FILE, buf.tobytes())
         except OSError:
             pass
 
 
-def _try_put(q, msg):
+def _serve_file(handler, path: str, content_type: str):
     try:
-        q.put_nowait(msg)
-        return True
-    except Exception:
-        return False
+        with open(path, "rb") as f:
+            data = f.read()
+        handler.send_response(200)
+        handler.send_header("Content-Type", content_type)
+        handler.send_header("Content-Length", str(len(data)))
+        handler.send_header("Cache-Control", "no-store")
+        handler.end_headers()
+        handler.wfile.write(data)
+    except OSError:
+        handler.send_response(204)
+        handler.end_headers()
 
 
 class _WebHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/":
+            body = _HTML.encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(_HTML.encode())
-        elif self.path == "/state":
-            body = json.dumps(list(_detection_log), ensure_ascii=False).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
         elif self.path.startswith("/frame"):
-            try:
-                with open(FRAME_FILE, "rb") as f:
-                    jpg = f.read()
-                self.send_response(200)
-                self.send_header("Content-Type", "image/jpeg")
-                self.send_header("Cache-Control", "no-store")
-                self.send_header("Content-Length", str(len(jpg)))
-                self.end_headers()
-                self.wfile.write(jpg)
-            except OSError:
-                self.send_response(204)
-                self.end_headers()
-        elif self.path == "/events":
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            q: queue.Queue = queue.Queue()
-            with _sse_lock:
-                _sse_clients.append(q)
-            try:
-                while True:
-                    try:
-                        self.wfile.write(q.get(timeout=25))
-                    except queue.Empty:
-                        self.wfile.write(b": ping\n\n")
-                    self.wfile.flush()
-            except Exception:
-                pass
-            finally:
-                with _sse_lock:
-                    if q in _sse_clients:
-                        _sse_clients.remove(q)
+            _serve_file(self, FRAME_FILE, "image/jpeg")
+        elif self.path.startswith("/detections.json"):
+            _serve_file(self, DETECTIONS_FILE, "application/json")
+        elif self.path.startswith("/snap/"):
+            name = os.path.basename(self.path.split("?")[0])
+            _serve_file(self, os.path.join(SNAPSHOTS_DIR, name), "image/jpeg")
         else:
             self.send_response(404)
             self.end_headers()
 
     def log_message(self, *_):
-        pass  # заглушаем access-логи
+        pass
+
+
+class _ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
 
 
 def _start_web_server():
-    srv = HTTPServer(("0.0.0.0", WEB_PORT), _WebHandler)
+    srv = _ThreadingHTTPServer(("0.0.0.0", WEB_PORT), _WebHandler)
     print(f"[*] Веб-интерфейс: http://0.0.0.0:{WEB_PORT}")
     srv.serve_forever()
 
@@ -557,7 +534,7 @@ def main():
                 if current_names:
                     if DEBUG:
                         print(f"[D] Кадр {frame_count}: {sorted(current_names)}")
-                    _web_add_event(list(current_names))
+                    _web_add_event(list(current_names), frame)
                 elif DEBUG:
                     print(f"[D] Кадр {frame_count}: лиц не обнаружено")
                 last_debug_names = current_names
