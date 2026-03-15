@@ -679,7 +679,9 @@ def main():
                     now = time.time()
                     if now - last_event_time.get(key, 0) >= WEB_EVENT_COOLDOWN:
                         last_event_time[key] = now
-                        _web_add_event(list(current_names), frame)
+                        snap = frame.copy()
+                        _draw_faces(snap, detected)
+                        _web_add_event(list(current_names), snap)
                 elif DEBUG:
                     ts = time.strftime("%H:%M:%S")
                     print(f"[D] {ts} кадр {frame_count}: лиц не обнаружено")
