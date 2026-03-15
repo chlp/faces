@@ -23,10 +23,13 @@ KNOWN_FACES_DIR       = "known_faces"
 CAMERA_INDEX          = 0
 GREET_COOLDOWN        = 10    # секунд между приветствиями одного человека
 PROCESS_EVERY_N       = 2     # обрабатывать каждый N-й кадр
+CONFIRM_FRAMES        = 3     # сколько кадров подряд нужно видеть человека перед приветствием
 SHOW_DISPLAY          = False # показывать окно (требует X-сервер/дисплей)
+DEBUG                 = True  # подробный вывод в консоль
+DEBUG_INTERVAL        = 5.0   # секунд между пульсом (если нет детекций)
 
 # Порог распознавания — косинусное сходство (0..1, выше = строже)
-RECOGNITION_THRESHOLD = 0.40
+RECOGNITION_THRESHOLD = 0.55
 
 GREETINGS     = {"ru": "Привет, {}!", "en": "Hello, {}!"}
 LANG          = "ru"
@@ -255,11 +258,13 @@ def load_known_faces(directory, detector: FaceDetector, encoder: FaceEncoder):
 # ── Распознавание ─────────────────────────────────────────────────────────────
 def identify_face(encoding, known_encodings, known_names):
     if len(known_encodings) == 0:
-        return UNKNOWN_LABEL
+        return UNKNOWN_LABEL, 0.0
     # Косинусное сходство (оба вектора уже L2-нормализованы → просто dot product)
     sims = known_encodings @ encoding
     best = int(np.argmax(sims))
-    return known_names[best] if sims[best] >= RECOGNITION_THRESHOLD else UNKNOWN_LABEL
+    score = float(sims[best])
+    name = known_names[best] if score >= RECOGNITION_THRESHOLD else UNKNOWN_LABEL
+    return name, score
 
 
 # ── Главный цикл ─────────────────────────────────────────────────────────────
@@ -285,6 +290,9 @@ def main():
 
     print("[*] Запуск. Нажми Q для выхода.")
     last_greeted: dict[str, float] = {}
+    confirm_streak: dict[str, int] = {}  # сколько кадров подряд видим человека
+    last_heartbeat = [0.0]
+    last_debug_names: set[str] = set()
     frame_count = 0
     detected: list[tuple] = []
 
@@ -299,31 +307,57 @@ def main():
 
         if frame_count % PROCESS_EVERY_N == 0:
             detected = []
-            for bbox, kps in detector.detect(frame):
-                enc  = encoder.encode(frame, kps)
-                name = (identify_face(enc, known_encodings, known_names)
-                        if enc is not None else UNKNOWN_LABEL)
+            faces = detector.detect(frame)
+
+            current_names: set[str] = set()
+            # Сбрасываем счётчик для тех, кого нет в текущем кадре
+            for gone in set(confirm_streak) - {UNKNOWN_LABEL}:
+                confirm_streak[gone] = 0
+            for bbox, kps in faces:
+                enc = encoder.encode(frame, kps)
+                if enc is not None:
+                    name, score = identify_face(enc, known_encodings, known_names)
+                else:
+                    name, score = UNKNOWN_LABEL, 0.0
                 detected.append((bbox, name))
+                current_names.add(name)
 
                 if name != UNKNOWN_LABEL:
-                    now = time.time()
-                    if now - last_greeted.get(name, 0) > GREET_COOLDOWN:
-                        last_greeted[name] = now
-                        greeting = GREETINGS[LANG].format(name)
-                        print(f"[>] {greeting}")
-                        speak(greeting)
+                    confirm_streak[name] = confirm_streak.get(name, 0) + 1
+                    if confirm_streak[name] >= CONFIRM_FRAMES:
+                        now = time.time()
+                        if now - last_greeted.get(name, 0) > GREET_COOLDOWN:
+                            last_greeted[name] = now
+                            greeting = GREETINGS[LANG].format(name)
+                            print(f"[>] {greeting}")
+                            speak(greeting)
+
+            if DEBUG:
+                now = time.time()
+                if current_names != last_debug_names:
+                    if current_names:
+                        print(f"[D] Кадр {frame_count}: {sorted(current_names)}")
+                    else:
+                        print(f"[D] Кадр {frame_count}: лиц не обнаружено")
+                    last_debug_names = current_names
+                    last_heartbeat[0] = now
+                elif not current_names and now - last_heartbeat[0] >= DEBUG_INTERVAL:
+                    print(f"[D] Кадр {frame_count}: лиц не обнаружено")
+                    last_heartbeat[0] = now
 
         for bbox, name in detected:
             x1, y1, x2, y2 = map(int, bbox)
             color = (0, 200, 0) if name != UNKNOWN_LABEL else (0, 0, 200)
             draw_box(frame, x1, y1, x2, y2, name, color)
 
-        cv2.imshow("Faces", frame)
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
+        if SHOW_DISPLAY:
+            cv2.imshow("Faces", frame)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
 
     cap.release()
-    cv2.destroyAllWindows()
+    if SHOW_DISPLAY:
+        cv2.destroyAllWindows()
     detector.release()
     encoder.release()
     print("[*] Завершено.")
