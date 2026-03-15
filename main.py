@@ -7,6 +7,7 @@
 
 import json
 import math
+import os
 import queue
 import time
 import subprocess
@@ -33,6 +34,9 @@ SHOW_DISPLAY          = False # показывать окно (требует X-
 DEBUG                 = True  # подробный вывод в консоль
 DEBUG_INTERVAL        = 5.0   # секунд между пульсом (если нет детекций)
 WEB_PORT              = 8080  # порт веб-интерфейса (0 = выключен)
+FRAME_FILE            = "/tmp/faces_frame.jpg"   # файл текущего кадра
+DETECTIONS_FILE       = "/tmp/faces_detections.json"  # файл событий обнаружения
+FRAME_INTERVAL        = 1.0  # секунд между сохранением кадра
 
 # Порог распознавания — косинусное сходство (0..1, выше = строже)
 RECOGNITION_THRESHOLD = 0.55
@@ -78,8 +82,8 @@ _ANCHORS = _build_anchor_centers()
 _detection_log: deque = deque(maxlen=10)
 _sse_clients: list    = []
 _sse_lock             = threading.Lock()
+_latest_frame_bgr     = None
 _latest_frame_lock    = threading.Lock()
-_latest_frame_jpg: bytes = b""
 
 _HTML = """<!DOCTYPE html>
 <html lang="ru"><head>
@@ -88,41 +92,43 @@ _HTML = """<!DOCTYPE html>
 <title>Камера</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
 body{background:#0f0f0f;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFont,sans-serif;
-  padding:20px;padding-top:max(20px,env(safe-area-inset-top))}
-h1{font-size:1rem;font-weight:600;color:#555;letter-spacing:.08em;text-transform:uppercase;
-  margin-bottom:14px;display:flex;align-items:center;gap:8px}
-#dot{width:9px;height:9px;border-radius:50%;background:#333;flex-shrink:0;transition:background .3s}
+  display:flex;flex-direction:column;height:100%;
+  padding:12px;padding-top:max(12px,env(safe-area-inset-top));gap:10px}
+header{display:flex;align-items:center;gap:8px;flex-shrink:0}
+#dot{width:8px;height:8px;border-radius:50%;background:#333;transition:background .3s}
 #dot.live{background:#30d158}
-#cam-wrap{background:#1c1c1e;border-radius:16px;overflow:hidden;margin-bottom:18px;
-  aspect-ratio:16/9;display:flex;align-items:center;justify-content:center}
+header span{font-size:.8rem;font-weight:600;color:#555;letter-spacing:.08em;text-transform:uppercase}
+#main{display:flex;gap:10px;flex:1;min-height:0}
+#cam-wrap{background:#1c1c1e;border-radius:12px;overflow:hidden;flex-shrink:0;width:240px;
+  display:flex;align-items:center;justify-content:center}
 #cam{width:100%;height:100%;object-fit:contain;display:block}
-#cam-placeholder{color:#333;font-size:.9rem}
-h2{font-size:.85rem;font-weight:600;color:#555;letter-spacing:.08em;text-transform:uppercase;
-  margin-bottom:12px}
-.card{background:#1c1c1e;border-radius:16px;padding:16px 18px;margin-bottom:10px;
-  display:flex;align-items:center;gap:14px;animation:in .25s ease}
-@keyframes in{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
-.ico{width:46px;height:46px;border-radius:50%;display:flex;align-items:center;
-  justify-content:center;font-size:1.4rem;flex-shrink:0}
+#cam-placeholder{color:#444;font-size:.8rem}
+#feed-wrap{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:6px}
+.card{background:#1c1c1e;border-radius:10px;padding:9px 12px;
+  display:flex;align-items:center;gap:10px;animation:in .2s ease;flex-shrink:0}
+@keyframes in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+.ico{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;
+  justify-content:center;font-size:1rem;flex-shrink:0}
 .ico.k{background:#0d2a1a}.ico.u{background:#2a0d0d}
 .info{flex:1;min-width:0}
-.names{font-size:1.15rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.names{font-size:.95rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .names.k{color:#30d158}.names.u{color:#ff453a}
-.ts{font-size:.8rem;color:#555;margin-top:3px}
-.badge{background:#2c2c2e;border-radius:10px;padding:4px 11px;font-size:.85rem;
-  color:#888;flex-shrink:0}
-#empty{text-align:center;color:#333;margin-top:40px;font-size:1rem}
+.ts{font-size:.72rem;color:#555;margin-top:2px}
+.badge{background:#2c2c2e;border-radius:8px;padding:2px 8px;font-size:.75rem;color:#888;flex-shrink:0}
+#empty{color:#333;font-size:.85rem;margin:auto;text-align:center}
 </style></head><body>
-<h1><span id="dot"></span>Камера</h1>
-<div id="cam-wrap">
-  <img id="cam" alt="" onerror="this.style.display='none';document.getElementById('cam-placeholder').style.display=''">
-  <span id="cam-placeholder" style="display:none">Нет кадра</span>
+<header><span id="dot"></span><span>Камера</span></header>
+<div id="main">
+  <div id="cam-wrap">
+    <img id="cam" alt="" onerror="this.style.display='none';document.getElementById('cam-placeholder').style.display=''">
+    <span id="cam-placeholder" style="display:none">Нет кадра</span>
+  </div>
+  <div id="feed-wrap"><p id="empty">Ожидание...</p></div>
 </div>
-<h2>Последние обнаружения</h2>
-<div id="feed"><p id="empty">Ожидание...</p></div>
 <script>
-const feed=document.getElementById('feed'),dot=document.getElementById('dot');
+const feed=document.getElementById('feed-wrap'),dot=document.getElementById('dot');
 function fmt(ts){
   const d=new Date(ts*1000),s=(Date.now()-ts*1000)/1000;
   if(s<60)return'только что';
@@ -172,11 +178,38 @@ connect();
 def _web_add_event(names: list):
     ev = {"ts": round(time.time(), 2), "names": sorted(names)}
     _detection_log.append(ev)
+    # Атомарно пишем в файл
+    try:
+        tmp = DETECTIONS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(list(_detection_log), f, ensure_ascii=False)
+        os.replace(tmp, DETECTIONS_FILE)
+    except OSError:
+        pass
     msg = ("data: " + json.dumps(ev, ensure_ascii=False) + "\n\n").encode()
     with _sse_lock:
         dead = [q for q in _sse_clients if not _try_put(q, msg)]
         for q in dead:
             _sse_clients.remove(q)
+
+def _frame_writer():
+    """Фоновый поток: раз в FRAME_INTERVAL секунд сохраняет текущий кадр в файл."""
+    while True:
+        time.sleep(FRAME_INTERVAL)
+        with _latest_frame_lock:
+            frame = _latest_frame_bgr
+        if frame is None:
+            continue
+        try:
+            ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if ok:
+                tmp = FRAME_FILE + ".tmp"
+                with open(tmp, "wb") as f:
+                    f.write(buf.tobytes())
+                os.replace(tmp, FRAME_FILE)
+        except OSError:
+            pass
+
 
 def _try_put(q, msg):
     try:
@@ -201,16 +234,16 @@ class _WebHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
         elif self.path.startswith("/frame"):
-            with _latest_frame_lock:
-                jpg = _latest_frame_jpg
-            if jpg:
+            try:
+                with open(FRAME_FILE, "rb") as f:
+                    jpg = f.read()
                 self.send_response(200)
                 self.send_header("Content-Type", "image/jpeg")
                 self.send_header("Cache-Control", "no-store")
                 self.send_header("Content-Length", str(len(jpg)))
                 self.end_headers()
                 self.wfile.write(jpg)
-            else:
+            except OSError:
                 self.send_response(204)
                 self.end_headers()
         elif self.path == "/events":
@@ -293,9 +326,6 @@ def _decode_scrfd(outputs, scale, pad):
       outputs[i*3+2] — kps    (N, 10) — смещения xy для 5 точек в единицах stride
     Если модель возвращает другой порядок — поправь _STRIDES или переставь индексы.
     """
-    if DEBUG:
-        print(f"[D] SCRFD outputs: {len(outputs)} тензоров, формы: {[o.shape for o in outputs]}")
-
     pad_w, pad_h = pad
     all_boxes, all_scores, all_kps = [], [], []
 
@@ -311,10 +341,6 @@ def _decode_scrfd(outputs, scale, pad):
             scores = 1.0 / (1.0 + np.exp(-scores_raw))
         else:
             scores = scores_raw
-
-        if DEBUG:
-            print(f"[D] stride={stride}: score max={scores.max():.4f} min={scores.min():.4f} "
-                  f"above_thresh={int((scores > _SCORE_THRESH).sum())}")
 
         # Декодирование bbox: дистанции (left,top,right,bottom) от центра якоря
         x1 = ac[:, 0] - bboxes[:, 0] * stride
@@ -384,10 +410,8 @@ class FaceDetector(_RKNNModel):
     def detect(self, frame):
         """Возвращает list[(bbox: ndarray[4], kps: ndarray[5,2])]."""
         img, scale, pad = letterbox(frame)
-        inp = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32)
-        inp = (inp - 127.5) / 128.0
-        inp = inp.transpose(2, 0, 1)[np.newaxis]        # 1×3×640×640
-        return _decode_scrfd(self._run([inp]), scale, pad)
+        inp = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)   # uint8 RGB, NHWC
+        return _decode_scrfd(self._run([inp[np.newaxis]]), scale, pad)
 
 
 class FaceEncoder(_RKNNModel):
@@ -397,10 +421,8 @@ class FaceEncoder(_RKNNModel):
         if M is None:
             return None
         aligned = cv2.warpAffine(frame, M, (112, 112), borderValue=0.0)
-        inp = cv2.cvtColor(aligned, cv2.COLOR_BGR2RGB).astype(np.float32)
-        inp = (inp - 127.5) / 128.0
-        inp = inp.transpose(2, 0, 1)[np.newaxis]        # 1×3×112×112
-        emb = self._run([inp])[0].flatten()
+        inp = cv2.cvtColor(aligned, cv2.COLOR_BGR2RGB)   # uint8 RGB, NHWC
+        emb = self._run([inp[np.newaxis]])[0].flatten()
         norm = np.linalg.norm(emb)
         return emb / norm if norm > 0 else None
 
@@ -463,9 +485,10 @@ def identify_face(encoding, known_encodings, known_names):
 
 # ── Главный цикл ─────────────────────────────────────────────────────────────
 def main():
-    global _latest_frame_jpg
+    global _latest_frame_bgr
     if WEB_PORT:
         threading.Thread(target=_start_web_server, daemon=True).start()
+        threading.Thread(target=_frame_writer, daemon=True).start()
 
     print("[*] Инициализация NPU моделей...")
     detector = FaceDetector(SCRFD_MODEL)
@@ -549,10 +572,8 @@ def main():
             draw_box(frame, x1, y1, x2, y2, name, color)
 
         if WEB_PORT:
-            ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-            if ok:
-                with _latest_frame_lock:
-                    _latest_frame_jpg = buf.tobytes()
+            with _latest_frame_lock:
+                _latest_frame_bgr = frame
 
         if SHOW_DISPLAY:
             cv2.imshow("Faces", frame)
