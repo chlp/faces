@@ -6,6 +6,7 @@
 """
 
 import json
+import math
 import queue
 import time
 import subprocess
@@ -43,7 +44,7 @@ ESPEAK_ARGS   = {"ru": ["-v", "ru", "-s", "140"], "en": ["-v", "en"]}
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
 
 # ── SCRFD внутренние параметры ───────────────────────────────────────────────
-_SCRFD_INPUT  = 640
+_SCRFD_INPUT  = 360   # модель скомпилирована под 360×360
 _STRIDES      = [8, 16, 32]
 _NUM_ANCHORS  = 2
 _SCORE_THRESH = 0.50
@@ -63,7 +64,7 @@ _ARCFACE_TPL = np.array([
 def _build_anchor_centers():
     centers = {}
     for stride in _STRIDES:
-        fs = _SCRFD_INPUT // stride
+        fs = math.ceil(_SCRFD_INPUT / stride)
         gy, gx = np.mgrid[0:fs, 0:fs]
         c = np.stack([gx * stride, gy * stride], axis=-1).reshape(-1, 2)
         # Каждую точку сетки повторяем _NUM_ANCHORS раз
@@ -265,10 +266,11 @@ def _decode_scrfd(outputs, scale, pad):
     pad_w, pad_h = pad
     all_boxes, all_scores, all_kps = [], [], []
 
+    n = len(_STRIDES)
     for i, stride in enumerate(_STRIDES):
-        scores = outputs[i * 3 + 0].flatten()
-        bboxes = outputs[i * 3 + 1].reshape(-1, 4)
-        kps    = outputs[i * 3 + 2].reshape(-1, 10)
+        scores = outputs[i + 0].flatten()
+        bboxes = outputs[i + n].reshape(-1, 4)
+        kps    = outputs[i + n * 2].reshape(-1, 10)
         ac     = _ANCHORS[stride]
 
         # Декодирование bbox: дистанции (left,top,right,bottom) от центра якоря
