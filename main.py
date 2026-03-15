@@ -494,9 +494,6 @@ def main():
             faces = detector.detect(frame)
 
             current_names: set[str] = set()
-            # Сбрасываем счётчик для тех, кого нет в текущем кадре
-            for gone in set(confirm_streak) - {UNKNOWN_LABEL}:
-                confirm_streak[gone] = 0
             for bbox, kps in faces:
                 frontal, frontal_offset = _is_frontal(kps)
                 if not frontal:
@@ -530,6 +527,8 @@ def main():
 
                 if name != UNKNOWN_LABEL:
                     confirm_streak[name] = confirm_streak.get(name, 0) + 1
+                    if DEBUG:
+                        print(f"[D]   streak={confirm_streak[name]}/{CONFIRM_FRAMES}")
                     if confirm_streak[name] >= CONFIRM_FRAMES:
                         now = time.time()
                         if now - last_greeted.get(name, 0) > GREET_COOLDOWN:
@@ -537,6 +536,10 @@ def main():
                             greeting = GREETINGS[LANG].format(name)
                             print(f"[>] {greeting}")
                             speak(greeting)
+
+            # Сбрасываем стрик для тех, кого нет в текущем кадре
+            for gone in set(confirm_streak) - current_names - {UNKNOWN_LABEL}:
+                confirm_streak[gone] = 0
 
             if current_names != last_debug_names:
                 if current_names:
