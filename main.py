@@ -8,12 +8,11 @@
 import json
 import math
 import os
+import sys
 import time
 import subprocess
 import threading
 from collections import deque
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from socketserver import ThreadingMixIn
 from pathlib import Path
 
 import cv2
@@ -34,9 +33,10 @@ SHOW_DISPLAY          = False # показывать окно (требует X-
 DEBUG                 = True  # подробный вывод в консоль
 DEBUG_INTERVAL        = 5.0   # секунд между пульсом (если нет детекций)
 WEB_PORT              = 8080  # порт веб-интерфейса (0 = выключен)
-FRAME_FILE            = "/tmp/faces_frame.jpg"
-DETECTIONS_FILE       = "/tmp/faces_detections.json"
-SNAPSHOTS_DIR         = "/tmp/faces_snapshots"
+WEB_DIR               = "/tmp/faces_web"
+FRAME_FILE            = WEB_DIR + "/frame.jpg"
+DETECTIONS_FILE       = WEB_DIR + "/detections.json"
+SNAPSHOTS_DIR         = WEB_DIR + "/snap"
 SNAPSHOTS_MAX         = 10
 FRAME_INTERVAL        = 1.0
 
@@ -80,7 +80,7 @@ def _build_anchor_centers():
 _ANCHORS = _build_anchor_centers()
 
 
-# ── Веб-интерфейс ────────────────────────────────────────────────────────────
+# ── Веб: данные ──────────────────────────────────────────────────────────────
 _detection_log: deque  = deque(maxlen=SNAPSHOTS_MAX)
 _snapshot_counter: int = 0
 _latest_frame_bgr      = None
@@ -140,14 +140,14 @@ function rebuild(evs){
     if(un>0)label+=(label?'\u00a0+\u00a0':'')+(un===1?'Незнакомец':un+'\u00a0незн.');
     const d=document.createElement('div');
     d.className='card';d.dataset.ts=ev.ts;
-    d.innerHTML=`<img class="thumb" src="/snap/${ev.img}.jpg?t=${ev.ts}" loading="lazy">
+    d.innerHTML=`<img class="thumb" src="snap/${ev.img}.jpg?t=${ev.ts}" loading="lazy">
     <div class="info"><div class="names ${hasKnown?'k':'u'}">${label}</div>
     <div class="ts">${fmt(ev.ts)}</div></div>`;
     feed.appendChild(d);
   });
 }
 function poll(){
-  fetch('/detections.json').then(r=>r.json()).then(evs=>{
+  fetch('detections.json?t='+Date.now()).then(r=>r.json()).then(evs=>{
     dot.className='live';
     const newTs=evs.length?evs[evs.length-1].ts:0;
     if(newTs!==lastTs){lastTs=newTs;rebuild(evs);}
@@ -157,10 +157,11 @@ setInterval(()=>feed.querySelectorAll('.card').forEach(c=>{
   c.querySelector('.ts').textContent=fmt(+c.dataset.ts);}),15000);
 poll();setInterval(poll,1000);
 const cam=document.getElementById('cam');
-setInterval(()=>{cam.src='/frame?t='+Date.now();},1000);
-cam.src='/frame?t=0';
+setInterval(()=>{cam.src='frame.jpg?t='+Date.now();},1000);
+cam.src='frame.jpg?t=0';
 </script></body></html>
 """
+
 
 def _write_file(path: str, data: bytes):
     tmp = path + ".tmp"
@@ -174,9 +175,7 @@ def _web_add_event(names: list, frame):
     slot = _snapshot_counter % SNAPSHOTS_MAX
     _snapshot_counter += 1
 
-    # Сохраняем снапшот кадра
     try:
-        os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
         ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         if ok:
             _write_file(os.path.join(SNAPSHOTS_DIR, f"{slot}.jpg"), buf.tobytes())
@@ -186,10 +185,9 @@ def _web_add_event(names: list, frame):
     ev = {"ts": round(time.time(), 2), "names": sorted(names), "img": slot}
     _detection_log.append(ev)
 
-    # Сохраняем список обнаружений
     try:
-        body = json.dumps(list(_detection_log), ensure_ascii=False).encode()
-        _write_file(DETECTIONS_FILE, body)
+        _write_file(DETECTIONS_FILE,
+                    json.dumps(list(_detection_log), ensure_ascii=False).encode())
     except OSError:
         pass
 
@@ -210,53 +208,15 @@ def _frame_writer():
             pass
 
 
-def _serve_file(handler, path: str, content_type: str):
-    try:
-        with open(path, "rb") as f:
-            data = f.read()
-        handler.send_response(200)
-        handler.send_header("Content-Type", content_type)
-        handler.send_header("Content-Length", str(len(data)))
-        handler.send_header("Cache-Control", "no-store")
-        handler.end_headers()
-        handler.wfile.write(data)
-    except OSError:
-        handler.send_response(204)
-        handler.end_headers()
-
-
-class _WebHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == "/":
-            body = _HTML.encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-        elif self.path.startswith("/frame"):
-            _serve_file(self, FRAME_FILE, "image/jpeg")
-        elif self.path.startswith("/detections.json"):
-            _serve_file(self, DETECTIONS_FILE, "application/json")
-        elif self.path.startswith("/snap/"):
-            name = os.path.basename(self.path.split("?")[0])
-            _serve_file(self, os.path.join(SNAPSHOTS_DIR, name), "image/jpeg")
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def log_message(self, *_):
-        pass
-
-
-class _ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
-    daemon_threads = True
-
-
 def _start_web_server():
-    srv = _ThreadingHTTPServer(("0.0.0.0", WEB_PORT), _WebHandler)
-    print(f"[*] Веб-интерфейс: http://0.0.0.0:{WEB_PORT}")
-    srv.serve_forever()
+    os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
+    _write_file(WEB_DIR + "/index.html", _HTML.encode())
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "http.server", str(WEB_PORT), "--directory", WEB_DIR],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    print(f"[*] Веб-интерфейс: http://0.0.0.0:{WEB_PORT}  (pid {proc.pid})")
+    return proc
 
 
 # ── Утилиты ──────────────────────────────────────────────────────────────────
@@ -463,8 +423,9 @@ def identify_face(encoding, known_encodings, known_names):
 # ── Главный цикл ─────────────────────────────────────────────────────────────
 def main():
     global _latest_frame_bgr
+    web_proc = None
     if WEB_PORT:
-        threading.Thread(target=_start_web_server, daemon=True).start()
+        web_proc = _start_web_server()
         threading.Thread(target=_frame_writer, daemon=True).start()
 
     print("[*] Инициализация NPU моделей...")
@@ -562,6 +523,8 @@ def main():
         cv2.destroyAllWindows()
     detector.release()
     encoder.release()
+    if web_proc:
+        web_proc.terminate()
     print("[*] Завершено.")
 
 
