@@ -71,3 +71,4 @@ Thumbs.db
 
 # Project-specific (optional: uncomment if you don't want to commit face data)
 known_faces/
+models/
