@@ -53,8 +53,9 @@ IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
 _SCRFD_INPUT  = 360   # модель скомпилирована под 360×360
 _STRIDES      = [8, 16, 32]
 _NUM_ANCHORS  = 2
-_SCORE_THRESH = 0.50
-_NMS_THRESH   = 0.40
+_SCORE_THRESH  = 0.50
+_NMS_THRESH    = 0.40
+_FRONTAL_THRESH = 0.35  # макс. смещение носа от центра глаз (доля расстояния между глазами)
 
 # Шаблон ключевых точек лица для выравнивания 112×112 (стандарт ArcFace/InsightFace)
 _ARCFACE_TPL = np.array([
@@ -211,6 +212,7 @@ def _frame_writer():
 def _start_web_server():
     os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
     _write_file(WEB_DIR + "/index.html", _HTML.encode())
+    _write_file(DETECTIONS_FILE, b"[]")
     proc = subprocess.Popen(
         [sys.executable, "-m", "http.server", str(WEB_PORT), "--directory", WEB_DIR],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -253,6 +255,20 @@ def draw_box(frame, x1, y1, x2, y2, name, color):
 
 
 # ── SCRFD постобработка ──────────────────────────────────────────────────────
+def _is_frontal(kps) -> bool:
+    """Возвращает True если лицо смотрит примерно прямо.
+    kps: (5, 2) — [left_eye, right_eye, nose, left_mouth, right_mouth]
+    Проверяем, что нос находится симметрично между глазами по горизонтали.
+    """
+    left_eye, right_eye, nose = kps[0], kps[1], kps[2]
+    eye_dist = abs(right_eye[0] - left_eye[0])
+    if eye_dist < 1:
+        return False
+    eye_center_x = (left_eye[0] + right_eye[0]) / 2
+    offset = abs(nose[0] - eye_center_x) / eye_dist
+    return offset < _FRONTAL_THRESH
+
+
 def _decode_scrfd(outputs, scale, pad):
     """
     Декодирует 9 выходных тензоров SCRFD → список (bbox[4 float], kps[5,2]).
@@ -473,6 +489,8 @@ def main():
             for gone in set(confirm_streak) - {UNKNOWN_LABEL}:
                 confirm_streak[gone] = 0
             for bbox, kps in faces:
+                if not _is_frontal(kps):
+                    continue
                 enc = encoder.encode(frame, kps)
                 if enc is not None:
                     name, score = identify_face(enc, known_encodings, known_names)
@@ -494,14 +512,17 @@ def main():
             if current_names != last_debug_names:
                 if current_names:
                     if DEBUG:
-                        print(f"[D] Кадр {frame_count}: {sorted(current_names)}")
+                        ts = time.strftime("%H:%M:%S")
+                        print(f"[D] {ts} кадр {frame_count}: {sorted(current_names)}")
                     _web_add_event(list(current_names), frame)
                 elif DEBUG:
-                    print(f"[D] Кадр {frame_count}: лиц не обнаружено")
+                    ts = time.strftime("%H:%M:%S")
+                    print(f"[D] {ts} кадр {frame_count}: лиц не обнаружено")
                 last_debug_names = current_names
                 last_heartbeat[0] = time.time()
             elif DEBUG and not current_names and time.time() - last_heartbeat[0] >= DEBUG_INTERVAL:
-                print(f"[D] Кадр {frame_count}: лиц не обнаружено")
+                ts = time.strftime("%H:%M:%S")
+                print(f"[D] {ts} кадр {frame_count}: лиц не обнаружено")
                 last_heartbeat[0] = time.time()
 
         for bbox, name in detected:
