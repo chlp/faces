@@ -16,8 +16,9 @@ git clone --depth=1 --filter=blob:none --sparse "$REPO" "$TMP"
         examples/mobilefacenet/model
 )
 
-# Ищем файлы для RK3588
-SCRFD_SRC=$(find "$TMP" -iname "*scrfd*rk3588*.rknn" | head -1)
+# Ищем файлы для RK3588: предпочитаем scrfd_10g, fallback на scrfd_2.5g
+SCRFD_SRC=$(find "$TMP" -iname "*scrfd_10g*rk3588*.rknn" | head -1)
+[ -z "$SCRFD_SRC" ] && SCRFD_SRC=$(find "$TMP" -iname "*scrfd*rk3588*.rknn" | head -1)
 FACE_SRC=$(find "$TMP" \( -iname "*mobilefacenet*rk3588*.rknn" -o -iname "*arcface*rk3588*.rknn" \) | head -1)
 
 if [ -n "$SCRFD_SRC" ]; then
