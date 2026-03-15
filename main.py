@@ -38,7 +38,7 @@ FRAME_FILE            = WEB_DIR + "/frame.jpg"
 DETECTIONS_FILE       = WEB_DIR + "/detections.json"
 SNAPSHOTS_DIR         = WEB_DIR + "/snap"
 SNAPSHOTS_MAX         = 15
-FRAME_INTERVAL        = 1.0
+FRAME_INTERVAL        = 0.1
 WEB_EVENT_COOLDOWN    = 60.0  # секунд: не повторять событие для тех же людей
 
 # Порог распознавания — косинусное сходство (0..1, выше = строже)
@@ -184,7 +184,7 @@ function poll(){
 }
 poll();setInterval(poll,1000);
 const cam=document.getElementById('cam');
-setInterval(()=>{cam.src='frame.jpg?t='+Date.now();},1000);
+setInterval(()=>{cam.src='frame.jpg?t='+Date.now();},150);
 cam.src='frame.jpg?t=0';
 </script></body></html>
 """
@@ -550,6 +550,8 @@ def main():
                 else:
                     name, score, top_candidates = UNKNOWN_LABEL, 0.0, []
                     aligned = None
+                if name == UNKNOWN_LABEL:
+                    continue
                 detected.append((bbox, name, score))
                 current_names.add(name)
 
