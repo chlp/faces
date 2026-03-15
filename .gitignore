@@ -71,3 +71,6 @@ Thumbs.db
 
 # Project-specific (optional: uncomment if you don't want to commit face data)
 # known_faces/
+models/scrfd.rknn
+models/arcface.rknn
+rknn_toolkit_lite2-2.3.2-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
