@@ -18,6 +18,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 from rknnlite.api import RKNNLite
 
 # ── Пути к моделям ──────────────────────────────────────────────────────────
@@ -68,6 +69,25 @@ _ARCFACE_TPL = np.array([
     [41.5493, 92.3655],
     [70.7299, 92.2041],
 ], dtype=np.float32)
+
+
+# ── Шрифт для Unicode-подписей на видео ─────────────────────────────────────
+def _load_ui_font(size: int = 20) -> ImageFont.FreeTypeFont:
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+        "/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            print(f"[*] Шрифт: {path}")
+            return ImageFont.truetype(path, size)
+    print("[!] TTF-шрифт не найден, кириллица может не отображаться")
+    return ImageFont.load_default()
+
+_UI_FONT = _load_ui_font()
 
 
 # ── Якорные центры (вычисляются один раз при старте) ────────────────────────
@@ -275,11 +295,25 @@ def speak(text: str):
     threading.Thread(target=_run, daemon=True).start()
 
 
-def draw_box(frame, x1, y1, x2, y2, name, color):
-    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-    cv2.rectangle(frame, (x1, y2 - 28), (x2, y2), color, cv2.FILLED)
-    cv2.putText(frame, name, (x1 + 6, y2 - 8),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
+def _draw_faces(frame, detected):
+    """Рисует рамки и Unicode-подписи. Один PIL-проход на кадр."""
+    if not detected:
+        return
+    # Рамки и залитые фоны подписей — через OpenCV (быстро)
+    for bbox, name, score in detected:
+        x1, y1, x2, y2 = map(int, bbox)
+        color = (0, 200, 0) if name != UNKNOWN_LABEL else (0, 0, 200)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        cv2.rectangle(frame, (x1, y2 - 30), (x2, y2), color, cv2.FILLED)
+    # Текст с кириллицей — один PIL-проход для всех лиц
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    pil = Image.fromarray(rgb)
+    draw = ImageDraw.Draw(pil)
+    for bbox, name, score in detected:
+        x1, _, _, y2 = map(int, bbox)
+        draw.text((x1 + 6, y2 - 27), f"{name} {score:.2f}",
+                  font=_UI_FONT, fill=(255, 255, 255))
+    frame[:] = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
 
 
 # ── SCRFD постобработка ──────────────────────────────────────────────────────
@@ -656,11 +690,7 @@ def main():
                 print(f"[D] {ts} кадр {frame_count}: лиц не обнаружено")
                 last_heartbeat[0] = time.time()
 
-        for bbox, name, score in detected:
-            x1, y1, x2, y2 = map(int, bbox)
-            color = (0, 200, 0) if name != UNKNOWN_LABEL else (0, 0, 200)
-            label = f"{name} {score:.2f}"
-            draw_box(frame, x1, y1, x2, y2, label, color)
+        _draw_faces(frame, detected)
 
         if WEB_PORT:
             with _latest_frame_lock:
