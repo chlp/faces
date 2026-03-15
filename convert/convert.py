@@ -1,9 +1,9 @@
 """
 Скачивает ONNX-модели InsightFace и конвертирует их в RKNN для RK3588.
 
-Модели из пакета buffalo_s:
-  det_500m.onnx  → /output/scrfd.rknn   (SCRFD-500M, детекция лиц)
-  w600k_mbf.onnx → /output/arcface.rknn (MobileFaceNet, 512-мерный эмбеддинг)
+Модели из пакета buffalo_l:
+  det_10g.onnx   → /output/scrfd.rknn   (SCRFD-10G, детекция лиц)
+  w600k_r50.onnx → /output/arcface.rknn (ArcFace ResNet50, 512-мерный эмбеддинг)
 """
 
 import urllib.request
@@ -32,11 +32,11 @@ OUTPUT_DIR = Path("/output")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Загрузка моделей ──────────────────────────────────────────────────────────
-PACK_URL = "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_s.zip"
-PACK_ZIP  = Path("/tmp/buffalo_s.zip")
-PACK_DIR  = Path("/tmp/buffalo_s")
+PACK_URL = "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip"
+PACK_ZIP  = Path("/tmp/buffalo_l.zip")
+PACK_DIR  = Path("/tmp/buffalo_l")
 
-print("[*] Скачивание insightface buffalo_s (SCRFD-500M + MobileFaceNet)...")
+print("[*] Скачивание insightface buffalo_l (SCRFD-10G + ArcFace ResNet50)...")
 urllib.request.urlretrieve(PACK_URL, PACK_ZIP)
 
 with zipfile.ZipFile(PACK_ZIP) as z:
@@ -49,8 +49,8 @@ def find_onnx(directory, keyword):
             return str(p)
     return None
 
-det_onnx  = find_onnx(PACK_DIR, "det_500m") or find_onnx(PACK_DIR, "det")
-face_onnx = find_onnx(PACK_DIR, "mbf") or find_onnx(PACK_DIR, "w600k")
+det_onnx  = find_onnx(PACK_DIR, "det_10g") or find_onnx(PACK_DIR, "det_2.5g") or find_onnx(PACK_DIR, "det_500m")
+face_onnx = find_onnx(PACK_DIR, "w600k_r50") or find_onnx(PACK_DIR, "mbf") or find_onnx(PACK_DIR, "w600k")
 
 if not det_onnx:
     raise FileNotFoundError("Не нашёл det_*.onnx в архиве. Файлы: " +
@@ -68,8 +68,13 @@ def convert(onnx_path: str, output_path: str, label: str, input_size: int):
     print(f"\n[*] Конвертация {label}...")
     rknn = RKNN(verbose=False)
 
-    # target_platform='rk3588', без квантизации (не нужна калибровочная выборка)
-    rknn.config(target_platform="rk3588", optimization_level=3)
+    # target_platform='rk3588', нормализация вшита в модель (вход — uint8 RGB [0-255])
+    rknn.config(
+        target_platform="rk3588",
+        optimization_level=3,
+        mean_values=[[127.5, 127.5, 127.5]],
+        std_values=[[128.0, 128.0, 128.0]],
+    )
 
     # Фиксируем динамический shape перед конвертацией
     fixed = fix_dynamic_shape(onnx_path, [1, 3, input_size, input_size])
@@ -87,7 +92,7 @@ def convert(onnx_path: str, output_path: str, label: str, input_size: int):
     print(f"[+] Сохранено: {output_path}  ({size_mb:.1f} МБ)")
 
 
-convert(det_onnx,  str(OUTPUT_DIR / "scrfd.rknn"),   "SCRFD-500M → scrfd.rknn",   640)
-convert(face_onnx, str(OUTPUT_DIR / "arcface.rknn"), "MobileFaceNet → arcface.rknn", 112)
+convert(det_onnx,  str(OUTPUT_DIR / "scrfd.rknn"),   "SCRFD-10G → scrfd.rknn",     640)
+convert(face_onnx, str(OUTPUT_DIR / "arcface.rknn"), "ArcFace R50 → arcface.rknn", 112)
 
 print("\n[✓] Готово! Скопируй models/scrfd.rknn и models/arcface.rknn на Orange Pi.")

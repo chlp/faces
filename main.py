@@ -387,6 +387,7 @@ class _RKNNModel:
 
 class FaceDetector(_RKNNModel):
     def __init__(self, path):
+        global _SCRFD_INPUT, _ANCHORS
         super().__init__(path)
         # Определяем размер входа по первому выводу модели (stride=8 → N = (size/8)^2 * 2)
         probe = np.zeros((1, _SCRFD_INPUT, _SCRFD_INPUT, 3), dtype=np.uint8)
@@ -396,7 +397,6 @@ class FaceDetector(_RKNNModel):
         inferred = int(round(8 * math.sqrt(n0 / 2)))
         if inferred != _SCRFD_INPUT:
             print(f"[*] SCRFD input: модель {inferred}×{inferred}, код был {_SCRFD_INPUT}×{_SCRFD_INPUT} — исправляю")
-            global _SCRFD_INPUT, _ANCHORS
             _SCRFD_INPUT = inferred
             _ANCHORS = _build_anchor_centers()
 
