@@ -78,6 +78,8 @@ _ANCHORS = _build_anchor_centers()
 _detection_log: deque = deque(maxlen=10)
 _sse_clients: list    = []
 _sse_lock             = threading.Lock()
+_latest_frame_lock    = threading.Lock()
+_latest_frame_jpg: bytes = b""
 
 _HTML = """<!DOCTYPE html>
 <html lang="ru"><head>
@@ -89,9 +91,15 @@ _HTML = """<!DOCTYPE html>
 body{background:#0f0f0f;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFont,sans-serif;
   padding:20px;padding-top:max(20px,env(safe-area-inset-top))}
 h1{font-size:1rem;font-weight:600;color:#555;letter-spacing:.08em;text-transform:uppercase;
-  margin-bottom:18px;display:flex;align-items:center;gap:8px}
+  margin-bottom:14px;display:flex;align-items:center;gap:8px}
 #dot{width:9px;height:9px;border-radius:50%;background:#333;flex-shrink:0;transition:background .3s}
 #dot.live{background:#30d158}
+#cam-wrap{background:#1c1c1e;border-radius:16px;overflow:hidden;margin-bottom:18px;
+  aspect-ratio:16/9;display:flex;align-items:center;justify-content:center}
+#cam{width:100%;height:100%;object-fit:contain;display:block}
+#cam-placeholder{color:#333;font-size:.9rem}
+h2{font-size:.85rem;font-weight:600;color:#555;letter-spacing:.08em;text-transform:uppercase;
+  margin-bottom:12px}
 .card{background:#1c1c1e;border-radius:16px;padding:16px 18px;margin-bottom:10px;
   display:flex;align-items:center;gap:14px;animation:in .25s ease}
 @keyframes in{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
@@ -104,9 +112,14 @@ h1{font-size:1rem;font-weight:600;color:#555;letter-spacing:.08em;text-transform
 .ts{font-size:.8rem;color:#555;margin-top:3px}
 .badge{background:#2c2c2e;border-radius:10px;padding:4px 11px;font-size:.85rem;
   color:#888;flex-shrink:0}
-#empty{text-align:center;color:#333;margin-top:80px;font-size:1rem}
+#empty{text-align:center;color:#333;margin-top:40px;font-size:1rem}
 </style></head><body>
-<h1><span id="dot"></span>Последние обнаружения</h1>
+<h1><span id="dot"></span>Камера</h1>
+<div id="cam-wrap">
+  <img id="cam" alt="" onerror="this.style.display='none';document.getElementById('cam-placeholder').style.display=''">
+  <span id="cam-placeholder" style="display:none">Нет кадра</span>
+</div>
+<h2>Последние обнаружения</h2>
 <div id="feed"><p id="empty">Ожидание...</p></div>
 <script>
 const feed=document.getElementById('feed'),dot=document.getElementById('dot');
@@ -139,6 +152,13 @@ function push(ev){
 setInterval(()=>feed.querySelectorAll('.card').forEach(c=>{
   c.querySelector('.ts').textContent=fmt(+c.dataset.ts);}),15000);
 fetch('/state').then(r=>r.json()).then(evs=>evs.forEach(push));
+const camImg=document.getElementById('cam');
+function refreshFrame(){
+  camImg.style.display='';
+  camImg.src='/frame?t='+Date.now();
+}
+refreshFrame();
+setInterval(refreshFrame,1000);
 function connect(){
   const es=new EventSource('/events');
   es.onopen=()=>dot.className='live';
@@ -180,6 +200,19 @@ class _WebHandler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(body)
+        elif self.path.startswith("/frame"):
+            with _latest_frame_lock:
+                jpg = _latest_frame_jpg
+            if jpg:
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(jpg)))
+                self.end_headers()
+                self.wfile.write(jpg)
+            else:
+                self.send_response(204)
+                self.end_headers()
         elif self.path == "/events":
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -268,10 +301,20 @@ def _decode_scrfd(outputs, scale, pad):
 
     n = len(_STRIDES)
     for i, stride in enumerate(_STRIDES):
-        scores = outputs[i + 0].flatten()
+        scores_raw = outputs[i + 0].flatten()
         bboxes = outputs[i + n].reshape(-1, 4)
         kps    = outputs[i + n * 2].reshape(-1, 10)
         ac     = _ANCHORS[stride]
+
+        # Применяем sigmoid если скоры — логиты (не в диапазоне 0..1)
+        if scores_raw.max() > 1.0 or scores_raw.min() < 0.0:
+            scores = 1.0 / (1.0 + np.exp(-scores_raw))
+        else:
+            scores = scores_raw
+
+        if DEBUG:
+            print(f"[D] stride={stride}: score max={scores.max():.4f} min={scores.min():.4f} "
+                  f"above_thresh={int((scores > _SCORE_THRESH).sum())}")
 
         # Декодирование bbox: дистанции (left,top,right,bottom) от центра якоря
         x1 = ac[:, 0] - bboxes[:, 0] * stride
@@ -420,6 +463,7 @@ def identify_face(encoding, known_encodings, known_names):
 
 # ── Главный цикл ─────────────────────────────────────────────────────────────
 def main():
+    global _latest_frame_jpg
     if WEB_PORT:
         threading.Thread(target=_start_web_server, daemon=True).start()
 
@@ -503,6 +547,12 @@ def main():
             x1, y1, x2, y2 = map(int, bbox)
             color = (0, 200, 0) if name != UNKNOWN_LABEL else (0, 0, 200)
             draw_box(frame, x1, y1, x2, y2, name, color)
+
+        if WEB_PORT:
+            ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if ok:
+                with _latest_frame_lock:
+                    _latest_frame_jpg = buf.tobytes()
 
         if SHOW_DISPLAY:
             cv2.imshow("Faces", frame)
