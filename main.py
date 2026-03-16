@@ -115,6 +115,9 @@ _detection_log: deque  = deque(maxlen=SNAPSHOTS_MAX)
 _snapshot_counter: int = 0
 _latest_frame_bgr      = None
 _latest_frame_lock     = threading.Lock()
+_stranger_freeze_frame = None
+_stranger_freeze_lock  = threading.Lock()
+_use_stranger_freeze   = False
 
 _HTML = """<!DOCTYPE html>
 <html lang="ru"><head>
@@ -251,8 +254,12 @@ def _frame_writer():
     """Фоновый поток: раз в FRAME_INTERVAL секунд сохраняет текущий кадр в файл."""
     while True:
         time.sleep(FRAME_INTERVAL)
-        with _latest_frame_lock:
-            frame = _latest_frame_bgr
+        if _use_stranger_freeze:
+            with _stranger_freeze_lock:
+                frame = _stranger_freeze_frame
+        else:
+            with _latest_frame_lock:
+                frame = _latest_frame_bgr
         if frame is None:
             continue
         try:
@@ -533,7 +540,7 @@ def identify_face(encoding, known_encodings, known_names):
 
 # ── Главный цикл ─────────────────────────────────────────────────────────────
 def main():
-    global _latest_frame_bgr
+    global _latest_frame_bgr, _use_stranger_freeze, _stranger_freeze_frame
     web_proc = None
     if WEB_PORT:
         web_proc = _start_web_server()
@@ -652,6 +659,10 @@ def main():
     # Отложенная запись незнакомца: ждём STRANGER_CONFIRM_DELAY секунд перед фиксацией
     # (saved_frame, saved_detected, saved_time, web_names, event_key) или None
     _pending_stranger = None
+    # Флаги последнего обработанного face_results (для логики заморозки стрима)
+    _face_has_stranger  = False  # незнакомец виден в последнем result
+    _face_stranger_conf = False  # стрик незнакомца набран
+    _face_has_known     = False  # знакомый виден в последнем result
 
     while True:
         ret, frame = cap.read()
@@ -721,6 +732,11 @@ def main():
                 stranger_streak = 0
             unknown_count = raw_unknown_count if stranger_streak >= CONFIRM_FRAMES else 0
 
+            # Обновляем флаги для логики заморозки стрима
+            _face_has_stranger  = raw_unknown_count > 0
+            _face_stranger_conf = unknown_count > 0
+            _face_has_known     = bool(current_names)
+
             # Сбрасываем стрик для тех, кого нет в текущем кадре
             for gone in set(confirm_streak) - current_names - {UNKNOWN_LABEL}:
                 confirm_streak[gone] = 0
@@ -777,6 +793,16 @@ def main():
         _draw_faces(frame, detected)
 
         if WEB_PORT:
+            # Заморозка стрима: незнакомец — показываем его последний кадр даже после ухода;
+            # знакомый опознан — возвращаемся к живому кадру.
+            if _face_has_known:
+                _use_stranger_freeze = False
+            elif _face_has_stranger:
+                with _stranger_freeze_lock:
+                    _stranger_freeze_frame = frame.copy()
+                if _face_stranger_conf:
+                    _use_stranger_freeze = True
+
             with _latest_frame_lock:
                 _latest_frame_bgr = frame
 
