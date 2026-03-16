@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Распознавание лиц на NPU (RKNN) — Orange Pi 5 Max / RK3588.
-Детекция: SCRFD-2.5G  |  Энкодинг: MobileFaceNet/ArcFace
+Детекция: SCRFD-10G  |  Энкодинг: ArcFace ResNet100 (Glint360K)
 Скачать модели: bash download_models.sh
 """
 
@@ -348,7 +348,7 @@ def _decode_scrfd(outputs, scale, pad):
     """
     Декодирует 9 выходных тензоров SCRFD → список (bbox[4 float], kps[5,2]).
 
-    Ожидаемый порядок тензоров (rknn_model_zoo SCRFD-2.5G, stride 8→16→32):
+    Ожидаемый порядок тензоров (rknn_model_zoo SCRFD, stride 8→16→32):
       outputs[i*3+0] — score  (N,)    — уже после sigmoid, значения 0..1
       outputs[i*3+1] — bbox   (N, 4)  — lt/rb дистанции в единицах stride
       outputs[i*3+2] — kps    (N, 10) — смещения xy для 5 точек в единицах stride
@@ -602,8 +602,7 @@ def main():
 
                 enc, aligned = encoder.encode(frm, kps)
                 if enc is None:
-                    results.append((bbox, UNKNOWN_LABEL, 0.0))
-                    continue
+                    continue  # аффинное преобразование не удалось — геометрия лица вырожденная
 
                 _, _, top = identify_face(enc, known_encodings, known_names)
 
@@ -618,9 +617,8 @@ def main():
                     if name == UNKNOWN_LABEL and score < STRANGER_MIN_SCORE:
                         continue
                 else:
+                    # База пуста — косинусное сходство не вычислить, лицо всё равно незнакомец
                     name, score = UNKNOWN_LABEL, 0.0
-                    if score < STRANGER_MIN_SCORE:
-                        continue
 
                 if DEBUG:
                     ts = time.strftime("%H:%M:%S")
