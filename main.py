@@ -27,7 +27,7 @@ ARCFACE_MODEL = "models/arcface.rknn"
 
 # ── Настройки ────────────────────────────────────────────────────────────────
 KNOWN_FACES_DIR       = "known_faces"
-CAMERA_INDEX          = 0
+CAMERA_MAX_INDEX      = 10    # перебирать индексы 0..N в поисках первой доступной камеры
 GREET_COOLDOWN        = 10    # секунд между приветствиями одного человека
 PROCESS_EVERY_N       = 1     # обрабатывать каждый N-й кадр
 CONFIRM_FRAMES        = 3     # сколько кадров подряд нужно видеть человека перед приветствием
@@ -541,10 +541,21 @@ def main():
     print("[*] Загрузка базы лиц...")
     known_encodings, known_names = load_known_faces(KNOWN_FACES_DIR, detector, encoder)
 
-    print(f"[*] Открытие камеры (индекс {CAMERA_INDEX})...")
-    cap = cv2.VideoCapture(CAMERA_INDEX)
-    if not cap.isOpened():
-        print(f"[!] Не удаётся открыть камеру {CAMERA_INDEX}")
+    cap = None
+    used_index = -1
+    for idx in range(CAMERA_MAX_INDEX):
+        cap = cv2.VideoCapture(idx)
+        if cap.isOpened():
+            # проверяем, что кадр реально читается
+            ret, _ = cap.read()
+            if ret:
+                used_index = idx
+                print(f"[*] Камера открыта: индекс {used_index}")
+                break
+        cap.release()
+        cap = None
+    if cap is None or used_index < 0:
+        print(f"[!] Не найдена доступная камера (проверены индексы 0..{CAMERA_MAX_INDEX - 1})")
         detector.release()
         encoder.release()
         return
