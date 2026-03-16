@@ -69,6 +69,7 @@ Multiple photos per person improve accuracy. Face must be clearly visible.
 |---|---|---|
 | `CAMERA_MAX_INDEX` | 10 | Перебираются индексы 0..N−1 в поисках первой доступной камеры |
 | `RECOGNITION_THRESHOLD` | 0.40 | Cosine similarity cutoff (higher = stricter) |
+| `STRANGER_MIN_SCORE` | 0.20 | Min similarity to count as "stranger"; below = ignore (filters false detections) |
 | `GREET_COOLDOWN` | 300 | Seconds between greetings per person |
 | `PROCESS_EVERY_N` | 2 | Process every Nth frame |
 | `LANG` | "ru" | "ru" or "en" |

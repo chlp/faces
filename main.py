@@ -48,6 +48,8 @@ WEB_EVENT_COOLDOWN    = 60.0  # секунд: не повторять событ
 
 # Порог распознавания — косинусное сходство (0..1, выше = строже)
 RECOGNITION_THRESHOLD = 0.55
+# Минимальное сходство для учёта как «незнакомец»: ниже — не считаем лицом (отсекаем ложные детекции)
+STRANGER_MIN_SCORE = 0.20
 
 GREETINGS     = {"ru": "Привет, {}!", "en": "Hello, {}!"}
 LANG          = "ru"
@@ -603,8 +605,13 @@ def main():
                     avg = float(np.mean(hist))
                     name  = best_cand if avg >= RECOGNITION_THRESHOLD else UNKNOWN_LABEL
                     score = avg
+                    # Не считаем незнакомцем при очень низком сходстве — это скорее не лицо
+                    if name == UNKNOWN_LABEL and score < STRANGER_MIN_SCORE:
+                        continue
                 else:
                     name, score = UNKNOWN_LABEL, 0.0
+                    if score < STRANGER_MIN_SCORE:
+                        continue
 
                 if DEBUG:
                     ts = time.strftime("%H:%M:%S")
@@ -612,7 +619,7 @@ def main():
                     status = "✓" if name != UNKNOWN_LABEL else "?"
                     n_hist = len(score_hist.get(top[0][0], [])) if top else 0
                     print(f"[D] {ts} {status} best={name} score(avg{n_hist})={score:.3f}  "
-                          f"offset={offset:.3f}  [{cands}]  thresh={RECOGNITION_THRESHOLD}")
+                          f"offset={offset:.3f}  [{cands}]  thresh={RECOGNITION_THRESHOLD} stranger_min={STRANGER_MIN_SCORE}")
                     if aligned is not None and WEB_PORT:
                         try:
                             debug_path = os.path.join(WEB_DIR, "aligned_last.jpg")
