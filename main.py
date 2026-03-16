@@ -134,7 +134,7 @@ header span{font-size:.75rem;font-weight:600;color:#555;letter-spacing:.08em;tex
 #grid{display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(4,1fr);
   gap:8px;min-height:0}
 .cell{background:#1c1c1e;border-radius:10px;overflow:hidden;display:flex;flex-direction:column;min-height:0}
-.cell img{width:100%;flex:1;object-fit:cover;display:block;min-height:0}
+.cell img{width:100%;flex:1;object-fit:contain;display:block;min-height:0;background:#000}
 .info{padding:5px 7px;flex-shrink:0;background:#1c1c1e}
 .names{font-size:.75rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .names.k{color:#30d158}.names.u{color:#ff453a}.names.empty{color:#333}
