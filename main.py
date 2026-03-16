@@ -28,6 +28,8 @@ ARCFACE_MODEL = "models/arcface.rknn"
 # ── Настройки ────────────────────────────────────────────────────────────────
 KNOWN_FACES_DIR       = "known_faces"
 CAMERA_MAX_INDEX      = 10    # перебирать индексы 0..N в поисках первой доступной камеры
+NO_FRAME_RECONNECT_AFTER = 10 # после стольких подряд "нет кадра" — ждать 5 с и искать другую камеру
+NO_FRAME_RECONNECT_DELAY  = 5 # секунд ждать перед переподключением
 GREET_COOLDOWN        = 10    # секунд между приветствиями одного человека
 PROCESS_EVERY_N       = 1     # обрабатывать каждый N-й кадр
 CONFIRM_FRAMES        = 3     # сколько кадров подряд нужно видеть человека перед приветствием
@@ -541,28 +543,26 @@ def main():
     print("[*] Загрузка базы лиц...")
     known_encodings, known_names = load_known_faces(KNOWN_FACES_DIR, detector, encoder)
 
-    cap = None
-    used_index = -1
-    for idx in range(CAMERA_MAX_INDEX):
-        cap = cv2.VideoCapture(idx)
-        if cap.isOpened():
-            # проверяем, что кадр реально читается
-            ret, _ = cap.read()
-            if ret:
-                used_index = idx
-                print(f"[*] Камера открыта: индекс {used_index}")
-                break
-        cap.release()
-        cap = None
-    if cap is None or used_index < 0:
+    def _open_camera():
+        for idx in range(CAMERA_MAX_INDEX):
+            c = cv2.VideoCapture(idx)
+            if c.isOpened():
+                r, _ = c.read()
+                if r:
+                    c.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                    c.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                    c.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    return c, idx
+            c.release()
+        return None, -1
+
+    cap, used_index = _open_camera()
+    if cap is None:
         print(f"[!] Не найдена доступная камера (проверены индексы 0..{CAMERA_MAX_INDEX - 1})")
         detector.release()
         encoder.release()
         return
-
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    print(f"[*] Камера открыта: индекс {used_index}")
 
     # ── Асинхронный пайплайн кодирования ────────────────────────────────────
     # Пока детектор обрабатывает кадр N на Core0,
@@ -637,14 +637,27 @@ def main():
     last_event_time: dict = {}
     frame_count = 0
     detected: list = []
+    no_frame_count = 0
 
     while True:
         ret, frame = cap.read()
         if not ret:
+            no_frame_count += 1
             print("[!] Нет кадра с камеры")
+            if no_frame_count >= NO_FRAME_RECONNECT_AFTER:
+                print(f"[*] Ждём {NO_FRAME_RECONNECT_DELAY} с, затем ищем другую камеру...")
+                cap.release()
+                time.sleep(NO_FRAME_RECONNECT_DELAY)
+                cap, used_index = _open_camera()
+                if cap is None:
+                    print("[!] Не удалось найти камеру после переподключения.")
+                    break
+                print(f"[*] Камера открыта: индекс {used_index}")
+                no_frame_count = 0
             time.sleep(0.1)
             continue
 
+        no_frame_count = 0
         frame_count += 1
 
         if frame_count % PROCESS_EVERY_N == 0:
@@ -720,7 +733,8 @@ def main():
 
     _enc_in.put(None)  # сигнал завершения энкодеру
     enc_thread.join(timeout=2)
-    cap.release()
+    if cap is not None:
+        cap.release()
     if SHOW_DISPLAY:
         cv2.destroyAllWindows()
     detector.release()
