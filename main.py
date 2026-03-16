@@ -45,13 +45,13 @@ DETECTIONS_FILE       = WEB_DIR + "/detections.json"
 SNAPSHOTS_DIR         = WEB_DIR + "/snap"
 SNAPSHOTS_MAX         = 15
 FRAME_INTERVAL        = 0.1
-WEB_EVENT_COOLDOWN    = 60.0  # секунд: не повторять событие для тех же людей
+WEB_EVENT_COOLDOWN    = 30.0  # секунд: не повторять событие для тех же людей
 STRANGER_CONFIRM_DELAY = 5.0  # секунд ожидания перед записью незнакомца (вдруг опознают)
 
 # Порог распознавания — косинусное сходство (0..1, выше = строже)
-RECOGNITION_THRESHOLD = 0.55
+RECOGNITION_THRESHOLD = 0.45
 # Минимальное сходство для учёта как «незнакомец»: ниже — не считаем лицом (отсекаем ложные детекции)
-STRANGER_MIN_SCORE = 0.20
+STRANGER_MIN_SCORE = 0.30
 
 GREETINGS     = {"ru": "Привет, {}!", "en": "Hello, {}!"}
 LANG          = "ru"
