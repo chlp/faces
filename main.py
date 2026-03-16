@@ -768,6 +768,16 @@ def main():
                         print(f"[D] {ts} кадр {frame_count}: лиц не обнаружено")
                 last_debug_state = current_state
                 last_heartbeat[0] = time.time()
+            elif not current_names and raw_unknown_count > 0 and _pending_stranger is None:
+                # Незнакомец виден, но стрик ещё не набран — всё равно начинаем ожидание,
+                # чтобы не пропустить тех, кто проходит мимо быстро
+                now = time.time()
+                pend_web_names = [UNKNOWN_LABEL] * raw_unknown_count
+                pend_key = (frozenset(), raw_unknown_count)
+                _pending_stranger = (frame.copy(), list(detected), now, pend_web_names, pend_key)
+                if DEBUG:
+                    ts = time.strftime("%H:%M:%S")
+                    print(f"[D] {ts} незнакомец (pre-streak) в ожидании ({STRANGER_CONFIRM_DELAY:.0f}с)...")
             elif DEBUG and not current_names and not unknown_count and time.time() - last_heartbeat[0] >= DEBUG_INTERVAL:
                 ts = time.strftime("%H:%M:%S")
                 print(f"[D] {ts} кадр {frame_count}: лиц не обнаружено")
