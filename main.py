@@ -639,6 +639,7 @@ def main():
 
     last_greeted: dict = {}
     confirm_streak: dict = {}
+    stranger_streak: int = 0  # подряд кадров с незнакомцем (как CONFIRM_FRAMES для известных)
     last_heartbeat = [0.0]
     last_debug_state: tuple = (frozenset(), 0)  # (known_names, unknown_count)
     last_event_time: dict = {}
@@ -684,11 +685,11 @@ def main():
         if face_results is not None:
             detected = face_results
             current_names: set = set()
-            unknown_count = 0
+            raw_unknown_count = 0
 
             for bbox, name, score in face_results:
                 if name == UNKNOWN_LABEL:
-                    unknown_count += 1
+                    raw_unknown_count += 1
                     continue
                 current_names.add(name)
                 confirm_streak[name] = confirm_streak.get(name, 0) + 1
@@ -701,6 +702,15 @@ def main():
                         greeting = GREETINGS[LANG].format(name)
                         print(f"[>] {greeting}")
                         speak(greeting)
+
+            # Стрик для незнакомца: учитываем только после CONFIRM_FRAMES подряд
+            if raw_unknown_count > 0:
+                stranger_streak += 1
+                if DEBUG:
+                    print(f"[D]   stranger_streak={stranger_streak}/{CONFIRM_FRAMES}")
+            else:
+                stranger_streak = 0
+            unknown_count = raw_unknown_count if stranger_streak >= CONFIRM_FRAMES else 0
 
             # Сбрасываем стрик для тех, кого нет в текущем кадре
             for gone in set(confirm_streak) - current_names - {UNKNOWN_LABEL}:
