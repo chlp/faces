@@ -48,3 +48,27 @@ known_faces/
 ```
 
 Перезапускать приложение после добавления фото — обязательно.
+
+## Автозапуск при загрузке системы
+
+На Orange Pi под пользователем `orangepi`:
+
+```bash
+# 1. Скопировать unit в пользовательский systemd
+mkdir -p ~/.config/systemd/user
+cp /home/orangepi/faces/faces.service ~/.config/systemd/user/
+
+# 2. Включить запуск без входа в систему (один раз)
+loginctl enable-linger orangepi
+
+# 3. Включить и запустить сервис
+systemctl --user daemon-reload
+systemctl --user enable faces
+systemctl --user start faces
+```
+
+Полезные команды:
+
+- Логи в реальном времени: `journalctl --user -u faces -f`
+- Остановить: `systemctl --user stop faces`
+- Отключить автозапуск: `systemctl --user disable faces`

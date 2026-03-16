@@ -1,0 +1,17 @@
+[Unit]
+Description=faces: распознавание лиц на Orange Pi
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/orangepi/faces
+ExecStart=/home/orangepi/faces/venv/bin/python main.py
+Restart=on-failure
+RestartSec=10
+# Логи в journalctl --user -u faces -f
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
