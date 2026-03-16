@@ -9,9 +9,9 @@ WorkingDirectory=/home/orangepi/faces
 ExecStart=/home/orangepi/faces/venv/bin/python main.py
 Restart=on-failure
 RestartSec=10
-# Логи в journalctl --user -u faces -f
-StandardOutput=journal
-StandardError=journal
+# Логи в файл (user journal на Orange Pi часто недоступен)
+StandardOutput=append:/home/orangepi/faces/faces.log
+StandardError=append:/home/orangepi/faces/faces.log
 
 [Install]
 WantedBy=default.target

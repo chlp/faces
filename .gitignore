@@ -6,6 +6,9 @@ __pycache__/
 # C extensions
 *.so
 
+# Лог сервиса (faces.service)
+faces.log
+
 # Virtual environments
 venv/
 env/

@@ -90,7 +90,10 @@ systemctl --user start faces
 
 Полезные команды:
 
-- Логи в реальном времени: `journalctl --user -u faces -f`
+- **Логи** — сервис пишет в файл `faces.log` в каталоге проекта (на Orange Pi user journal часто недоступен, поэтому логи в файле):
+  - следить в реальном времени: `tail -f ~/faces/faces.log`
+  - последние 200 строк: `tail -n 200 ~/faces/faces.log`
+  - с прокруткой (выход из follow: Ctrl+C, снова: F): `tail -f ~/faces/faces.log | less +F`
 - Остановить: `systemctl --user stop faces`
 - Отключить автозапуск: `systemctl --user disable faces`
 
@@ -113,12 +116,12 @@ systemctl --user is-enabled faces
 **3. Состояние сервиса и последние логи:**
 ```bash
 systemctl --user status faces
-journalctl --user -u faces -b -n 80
+tail -n 80 ~/faces/faces.log
 ```
 По статусу видно: active, failed или inactive. В логах — причина (камера, NPU, путь к venv и т.д.).
 
 **4. Запускался ли вообще user manager после загрузки:**
 ```bash
-journalctl --user -b -n 30
+systemctl --user status
 ```
-Если логов нет или видны ошибки — возможна проблема со стартом пользовательского systemd.
+Если сервис inactive/failed — смотреть вывод `status` и конец `faces.log`.
