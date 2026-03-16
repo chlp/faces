@@ -72,6 +72,7 @@ Multiple photos per person improve accuracy. Face must be clearly visible.
 | `STRANGER_MIN_SCORE` | 0.20 | Min similarity to count as "stranger"; below = ignore (filters false detections) |
 | `GREET_COOLDOWN` | 300 | Seconds between greetings per person |
 | `PROCESS_EVERY_N` | 2 | Process every Nth frame |
+| `STREAK_MIN_INTERVAL` | 2/3 s | Min seconds between streak increments (3 streaks ≈ 2 s) |
 | `LANG` | "ru" | "ru" or "en" |
 | `_SCORE_THRESH` | 0.50 | Face detection confidence threshold |
 | `_NMS_THRESH` | 0.40 | NMS IoU threshold |

@@ -94,6 +94,7 @@ systemctl --user start faces
   - следить в реальном времени: `tail -f ~/faces/faces.log`
   - последние 200 строк: `tail -n 200 ~/faces/faces.log`
   - с прокруткой (выход из follow: Ctrl+C, снова: F): `tail -f ~/faces/faces.log | less +F`
+- Перезапустить: `systemctl --user restart faces`
 - Остановить: `systemctl --user stop faces`
 - Отключить автозапуск: `systemctl --user disable faces`
 
