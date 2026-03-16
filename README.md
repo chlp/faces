@@ -58,8 +58,9 @@ known_faces/
 mkdir -p ~/.config/systemd/user
 cp /home/orangepi/faces/faces.service ~/.config/systemd/user/
 
-# 2. Включить запуск без входа в систему (один раз)
-loginctl enable-linger orangepi
+# 2. Включить запуск без входа в систему (один раз!)
+# Важно: эту команду нужно выполнить с root (sudo), иначе после перезагрузки сервис не поднимется
+sudo loginctl enable-linger orangepi
 
 # 3. Включить и запустить сервис
 systemctl --user daemon-reload
@@ -72,3 +73,32 @@ systemctl --user start faces
 - Логи в реальном времени: `journalctl --user -u faces -f`
 - Остановить: `systemctl --user stop faces`
 - Отключить автозапуск: `systemctl --user disable faces`
+
+### Если после перезагрузки сервис не запустился
+
+Зайди на Orange Pi **под пользователем orangepi** (тот, под которым ставил сервис) и выполни по порядку:
+
+**1. Включён ли linger (без него user-сервисы при загрузке не стартуют):**
+```bash
+loginctl show-user $USER | grep Linger
+```
+Должно быть `Linger=yes`. Если `no` — выполни один раз с root: `sudo loginctl enable-linger orangepi`, затем перезагрузка.
+
+**2. Включён ли сервис:**
+```bash
+systemctl --user is-enabled faces
+```
+Должно быть `enabled`. Если `disabled` — снова: `systemctl --user enable faces`.
+
+**3. Состояние сервиса и последние логи:**
+```bash
+systemctl --user status faces
+journalctl --user -u faces -b -n 80
+```
+По статусу видно: active, failed или inactive. В логах — причина падения (камера, NPU, путь к venv и т.д.).
+
+**4. Запускался ли вообще user manager после загрузки:**
+```bash
+journalctl --user -b -n 30
+```
+Если логов нет или видно ошибки — возможна проблема со стартом пользовательского systemd.
