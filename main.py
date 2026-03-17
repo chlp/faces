@@ -10,6 +10,7 @@ import json
 import math
 import os
 import queue
+import signal
 import sys
 import time
 import subprocess
@@ -292,9 +293,9 @@ def _start_web_server():
 
 # ── Утилиты ──────────────────────────────────────────────────────────────────
 def letterbox(img, size=None, fill=(114, 114, 114)):
+    """Масштабирует с сохранением пропорций и добивает до квадрата."""
     if size is None:
         size = _SCRFD_INPUT
-    """Масштабирует с сохранением пропорций и добивает до квадрата."""
     h, w = img.shape[:2]
     scale = min(size / h, size / w)
     nh, nw = int(h * scale), int(w * scale)
@@ -542,7 +543,7 @@ def _build_name_index(known_names):
     return idx
 
 
-def identify_face(encoding, known_encodings, known_names, name_index):
+def identify_face(encoding, known_encodings, name_index):
     if len(known_encodings) == 0:
         return []
     sims = known_encodings @ encoding
@@ -624,7 +625,7 @@ def main():
                 if enc is None:
                     continue  # аффинное преобразование не удалось — геометрия лица вырожденная
 
-                top = identify_face(enc, known_encodings, known_names, name_index)
+                top = identify_face(enc, known_encodings, name_index)
 
                 if top:
                     best_cand, best_raw = top[0]
@@ -689,7 +690,6 @@ def main():
         _running = False
         print(f"\n[*] Получен сигнал {sig}, завершаем...")
 
-    import signal
     signal.signal(signal.SIGINT, _on_signal)
     signal.signal(signal.SIGTERM, _on_signal)
 
