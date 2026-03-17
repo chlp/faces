@@ -490,7 +490,7 @@ def speak(text: str, lang: str = "ru"):
 
 
 def _draw_faces(frame, detected):
-    """Рисует рамки и Unicode-подписи через PIL (только ROI полоски)."""
+    """Рисует рамки и подписи сбоку (слева или справа, в зависимости от края)."""
     if not detected:
         return
     h_frame, w_frame = frame.shape[:2]
@@ -498,8 +498,22 @@ def _draw_faces(frame, detected):
         x1, y1, x2, y2 = map(int, bbox)
         color = (0, 200, 0) if name != UNKNOWN_LABEL else (0, 0, 200)
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-        lx1, ly1 = max(x1, 0), max(y2 - 30, 0)
-        lx2, ly2 = min(x2, w_frame), min(y2, h_frame)
+        # определяем размер текста через PIL (без отрисовки)
+        bbox_left = _UI_FONT.getlength(name)
+        label_w = int(bbox_left) + 12  # padding 6+6
+        label_h = 26
+        # подпись справа от рамки, если влезает; иначе слева
+        if x2 + label_w <= w_frame:
+            lx1 = x2
+        else:
+            lx1 = x1 - label_w
+            if lx1 < 0:
+                lx1 = 0
+        ly1 = max(y1, 0)
+        lx2 = lx1 + label_w
+        ly2 = min(ly1 + label_h, h_frame)
+        if lx2 > w_frame:
+            lx2 = w_frame
         if lx2 <= lx1 or ly2 <= ly1:
             continue
         cv2.rectangle(frame, (lx1, ly1), (lx2, ly2), color, cv2.FILLED)
