@@ -207,6 +207,12 @@ class EventStore:
                     result[name] = ts
         return result
 
+    def clear(self):
+        with self._lock:
+            self._conn.execute("DELETE FROM events")
+            self._conn.execute("VACUUM")
+            self._conn.commit()
+
     def close(self):
         self._conn.close()
 
@@ -350,6 +356,9 @@ class _WebHandler(http.server.BaseHTTPRequestHandler):
             )
         elif path == "/reload":
             web.reload_requested.set()
+            self._send(b'{"ok":true}', "application/json")
+        elif path == "/clear":
+            web.event_store.clear()
             self._send(b'{"ok":true}', "application/json")
         elif path == "/debug/aligned.jpg":
             buf = web._aligned_jpeg
