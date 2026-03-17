@@ -396,7 +396,8 @@ class WebServer:
 
     def update_source(self, frame, has_known, has_stranger, stranger_conf):
         snap = frame.copy()
-        if has_known:
+        if has_known or not has_stranger:
+            # знакомый появился ИЛИ лиц нет → живой стрим
             self._use_freeze = False
         elif has_stranger:
             with self._freeze_lock:
@@ -495,8 +496,7 @@ def _draw_faces(frame, detected):
         roi_rgb = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
         pil = Image.fromarray(roi_rgb)
         draw = ImageDraw.Draw(pil)
-        draw.text((6, 3), f"{name} {score:.2f}",
-                  font=_UI_FONT, fill=(255, 255, 255))
+        draw.text((6, 3), name, font=_UI_FONT, fill=(255, 255, 255))
         frame[ly1:ly2, lx1:lx2] = cv2.cvtColor(
             np.array(pil), cv2.COLOR_RGB2BGR
         )
