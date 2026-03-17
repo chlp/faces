@@ -45,6 +45,30 @@ Multiple photos per person improve accuracy. Face must be clearly visible.
 - `main.py` — single-file app, all logic here
 - `known_faces/` — face database, one subfolder per person
 - `models/` — RKNN model files (`scrfd.rknn`, `arcface.rknn`)
+- `data/` — runtime data (auto-created)
+  - `faces.db` — SQLite event log (snapshots as BLOBs, auto-pruned to 15)
+
+### Classes in main.py
+
+| Class | Role |
+|---|---|
+| `Config` | Dataclass with all tuning knobs. Populated from argparse + env vars (`FACE_PORT`, `FACE_THRESHOLD`, etc.) |
+| `EventStore` | SQLite persistence for detection events + snapshot BLOBs. Thread-safe (WAL mode) |
+| `WebServer` | `ThreadingHTTPServer` serving frames from memory (no disk I/O). Endpoints: `/frame.jpg`, `/detections.json`, `/snap/<id>.jpg`, `/health`, `/reload` |
+| `FaceDB` | Holds `known_encodings` + `name_index`. Watches `known_faces/` mtime every 30s. Hot-reloads via encode thread pause/resume protocol |
+| `FaceTracker` | State machine: streaks, pending stranger, greeting cooldowns. `update(face_results, frame) → list[event]` |
+| `FaceDetector` / `FaceEncoder` | RKNN model wrappers pinned to NPU Core0 / Core1 |
+
+### Thread model
+
+| Thread | What it does | RKNN core |
+|---|---|---|
+| Main | Camera read → SCRFD detect → queue faces → dispatch events → draw | Core0 |
+| Encode | Dequeue faces → ArcFace encode → identify → queue results | Core1 |
+| FrameWriter | JPEG-encode current frame → store in WebServer memory buffer | — |
+| HTTP (pool) | Serve requests from WebServer memory buffers | — |
+
+**Hot-reload protocol**: main sends `"pause"` sentinel to encode queue → waits for `"paused"` → reloads FaceDB (both models from main thread) → sends `"resume"`
 
 ### NPU pipeline
 
@@ -66,26 +90,44 @@ Multiple photos per person improve accuracy. Face must be clearly visible.
 - Stranger events are delayed by `STRANGER_CONFIRM_DELAY` seconds (in case the person is identified before that)
 - Live web stream freezes on the stranger's last frame until a known person appears
 
-## Tuning knobs (top of main.py)
+## CLI arguments / env vars
 
-| Variable | Default | Effect |
-|---|---|---|
-| `CAMERA_MAX_INDEX` | 10 | Перебираются индексы 0..N−1 в поисках первой доступной камеры |
-| `NO_FRAME_RECONNECT_AFTER` | 10 | Подряд «нет кадра» до переподключения |
-| `NO_FRAME_RECONNECT_DELAY` | 5 | Секунд ожидания перед переподключением |
-| `RECOGNITION_THRESHOLD` | 0.45 | Cosine similarity cutoff (higher = stricter) |
-| `STRANGER_MIN_SCORE` | 0.30 | Min similarity to count as "stranger"; below = likely false detection, ignore |
-| `GREET_COOLDOWN` | 10 | Seconds between greetings per person |
-| `PROCESS_EVERY_N` | 1 | Process every Nth frame (1 = every frame) |
-| `CONFIRM_FRAMES` | 3 | Consecutive recognitions required before greeting |
-| `STREAK_MIN_INTERVAL` | 1/3 s | Min seconds between streak increments (3 streaks ≈ 1 s) |
-| `SCORE_WINDOW` | 7 | Frames over which recognition score is averaged |
-| `WEB_EVENT_COOLDOWN` | 30 | Seconds before the same face set triggers another web snapshot |
-| `STRANGER_CONFIRM_DELAY` | 5 | Seconds to wait before recording a stranger event |
-| `LANG` | "ru" | "ru" or "en" |
-| `_SCORE_THRESH` | 0.50 | Face detection confidence threshold |
-| `_NMS_THRESH` | 0.40 | NMS IoU threshold |
-| `_FRONTAL_THRESH` | 0.60 | Max nose-from-eye-center offset (fraction of eye distance); higher = allow more profile |
+```bash
+python3 main.py --port 8080 --threshold 0.45 --lang ru --camera -1 --data-dir data
+python3 main.py --no-web --no-tts --no-debug --display
+```
+
+Env vars: `FACE_PORT`, `FACE_THRESHOLD`, `FACE_LANG`, `FACE_CAMERA`, `FACE_DATA_DIR` (override defaults, CLI takes priority).
+
+## Web endpoints
+
+| Endpoint | Description |
+|---|---|
+| `GET /` | Web UI (HTML/JS) |
+| `GET /frame.jpg` | Live JPEG frame (from memory, ~3fps) |
+| `GET /detections.json` | Recent events JSON |
+| `GET /snap/<id>.jpg` | Event snapshot (from SQLite BLOB) |
+| `GET /health` | `{uptime_s, last_detection_ts, frame_jpeg_bytes}` |
+| `GET /reload` | Trigger hot-reload of face database |
+| `GET /debug/aligned.jpg` | Last aligned face (debug) |
+
+## Tuning knobs (Config dataclass)
+
+| Field | Default | CLI flag | Effect |
+|---|---|---|---|
+| `recognition_threshold` | 0.45 | `--threshold` | Cosine similarity cutoff (higher = stricter) |
+| `stranger_min_score` | 0.30 | — | Min similarity to count as "stranger"; below = ignore |
+| `greet_cooldown` | 10 | — | Seconds between greetings per person |
+| `process_every_n` | 1 | — | Process every Nth frame |
+| `confirm_frames` | 3 | — | Consecutive recognitions before greeting |
+| `streak_min_interval` | 1/3 s | — | Min seconds between streak increments |
+| `score_window` | 7 | — | Frames over which score is averaged |
+| `web_event_cooldown` | 30 | — | Seconds before same face set re-triggers event |
+| `stranger_confirm_delay` | 5 | — | Seconds to wait before recording stranger |
+| `lang` | "ru" | `--lang` | "ru" or "en" |
+| `_SCORE_THRESH` | 0.50 | — | Face detection confidence threshold |
+| `_NMS_THRESH` | 0.40 | — | NMS IoU threshold |
+| `_FRONTAL_THRESH` | 0.60 | — | Max nose offset (higher = allow more profile) |
 
 ## Dependency notes
 
