@@ -5,6 +5,7 @@
 Скачать модели: bash download_models.sh
 """
 
+import http.server
 import json
 import math
 import os
@@ -44,7 +45,7 @@ FRAME_FILE            = WEB_DIR + "/frame.jpg"
 DETECTIONS_FILE       = WEB_DIR + "/detections.json"
 SNAPSHOTS_DIR         = WEB_DIR + "/snap"
 SNAPSHOTS_MAX         = 15
-FRAME_INTERVAL        = 0.1
+FRAME_INTERVAL        = 1/3.0  # max 3 кадра/сек на диск
 WEB_EVENT_COOLDOWN    = 30.0  # секунд: не повторять событие для тех же людей
 STRANGER_CONFIRM_DELAY = 5.0  # секунд ожидания перед записью незнакомца (вдруг опознают)
 
@@ -215,7 +216,7 @@ function poll(){
 }
 poll();setInterval(poll,1000);
 const cam=document.getElementById('cam');
-setInterval(()=>{cam.src='frame.jpg?t='+Date.now();},150);
+setInterval(()=>{cam.src='frame.jpg?t='+Date.now();},334);
 cam.src='frame.jpg?t=0';
 </script></body></html>
 """
@@ -270,16 +271,23 @@ def _frame_writer():
             pass
 
 
+class _SilentHandler(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass  # не засорять консоль HTTP-логами
+
+
 def _start_web_server():
     os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
     _write_file(WEB_DIR + "/index.html", _HTML.encode())
     _write_file(DETECTIONS_FILE, b"[]")
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "http.server", str(WEB_PORT), "--directory", WEB_DIR],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    print(f"[*] Веб-интерфейс: http://0.0.0.0:{WEB_PORT}  (pid {proc.pid})")
-    return proc
+
+    def _make_handler(*args, **kwargs):
+        return _SilentHandler(*args, directory=WEB_DIR, **kwargs)
+
+    server = http.server.ThreadingHTTPServer(("", WEB_PORT), _make_handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    print(f"[*] Веб-интерфейс: http://0.0.0.0:{WEB_PORT}  (threading)")
+    return server
 
 
 # ── Утилиты ──────────────────────────────────────────────────────────────────
@@ -812,7 +820,7 @@ def main():
                     _use_stranger_freeze = True
 
             with _latest_frame_lock:
-                _latest_frame_bgr = frame
+                _latest_frame_bgr = frame.copy()
 
         if SHOW_DISPLAY:
             cv2.imshow("Faces", frame)
@@ -828,7 +836,7 @@ def main():
     detector.release()
     encoder.release()
     if web_proc:
-        web_proc.terminate()
+        web_proc.shutdown()
     print("[*] Завершено.")
 
 
