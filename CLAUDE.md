@@ -109,6 +109,7 @@ Env vars: `FACE_PORT`, `FACE_THRESHOLD`, `FACE_LANG`, `FACE_CAMERA`, `FACE_DATA_
 | `GET /snap/<id>.jpg` | Event snapshot (from SQLite BLOB) |
 | `GET /health` | `{uptime_s, last_detection_ts, frame_jpeg_bytes}` |
 | `GET /reload` | Trigger hot-reload of face database |
+| `GET /clear` | Delete all events and snapshots from SQLite |
 | `GET /debug/aligned.jpg` | Last aligned face (debug) |
 
 ## Tuning knobs (Config dataclass)

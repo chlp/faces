@@ -7,6 +7,8 @@
 - `main.py` — основное приложение (один файл, вся логика)
 - `known_faces/` — база лиц: одна папка на человека, внутри — фото (`.jpg` / `.png`)
 - `models/` — RKNN-модели (скачиваются скриптом `download_models.sh`)
+- `data/` — рантайм-данные (создаётся автоматически)
+  - `faces.db` — SQLite: лог событий + снапшоты (BLOB), авто-прунинг до 15 записей
 - `install.sh` — установка системных зависимостей и Python-окружения на Orange Pi
 - `download_models.sh` — загрузка моделей SCRFD и ArcFace из rknn_model_zoo
 - `requirements.txt` — Python-пакеты (opencv, numpy, Pillow и т.д.)
@@ -20,7 +22,6 @@ chmod +x install.sh && ./install.sh
 # 2. RKNN runtime не в PyPI — скачать .whl вручную и положить в каталог проекта:
 #    https://github.com/airockchip/rknn-toolkit2/tree/master/rknn-toolkit-lite2/packages
 #    (выбрать файл под свою архитектуру, например linux_aarch64)
-#    Если .whl уже лежит рядом с install.sh — он подхватится при установке.
 
 # 3. Скачать модели детекции и распознавания
 ./download_models.sh
@@ -34,15 +35,38 @@ source venv/bin/activate
 python3 main.py
 ```
 
-Веб-интерфейс поднимается самим `main.py` — отдельно ничего запускать не нужно.
+## CLI-аргументы
+
+```bash
+python3 main.py                                    # всё по умолчанию
+python3 main.py --port 9090 --threshold 0.50       # другой порт и порог
+python3 main.py --lang en --no-tts                  # английский, без озвучки
+python3 main.py --camera 2 --data-dir /mnt/data     # конкретная камера, другой каталог данных
+python3 main.py --no-web --display                   # без веба, с окном OpenCV
+python3 main.py --no-debug                           # без debug-вывода в консоль
+```
+
+Env-переменные (задают умолчания, CLI имеет приоритет):
+`FACE_PORT`, `FACE_THRESHOLD`, `FACE_LANG`, `FACE_CAMERA`, `FACE_DATA_DIR`
 
 ## Веб-интерфейс
 
 В браузере: `http://<ip-orange-pi>:8080`
 
-Показывает текущий кадр с камеры (обновление раз в секунду) и последние 15 обнаружений с миниатюрами в момент детекции.
+Показывает живой кадр с камеры (~3 fps) и последние 15 событий с миниатюрами. Кадры отдаются из памяти (без записи на диск). Кнопка `↻` перезагружает базу лиц без рестарта.
 
-Данные лежат в `/tmp/faces_web/` и пересоздаются при каждом запуске.
+### Эндпоинты
+
+| Endpoint | Описание |
+|---|---|
+| `GET /` | Веб-UI |
+| `GET /frame.jpg` | Живой JPEG-кадр (из памяти) |
+| `GET /detections.json` | Последние события (JSON) |
+| `GET /snap/<id>.jpg` | Снапшот события (BLOB из SQLite) |
+| `GET /health` | Статус: `{uptime_s, last_detection_ts, frame_jpeg_bytes}` |
+| `GET /reload` | Перезагрузить базу лиц (hot-reload) |
+| `GET /clear` | Удалить все события и снапшоты из БД |
+| `GET /debug/aligned.jpg` | Последнее выровненное лицо (дебаг) |
 
 ## Добавление новых людей
 
@@ -57,17 +81,21 @@ known_faces/
     photo2.jpg
 ```
 
-После добавления или смены фото приложение нужно перезапустить.
+База перезагружается автоматически каждые 30 секунд при изменении файлов, либо по кнопке `↻` в веб-UI, либо через `GET /reload`.
 
-## Настройки (в начале main.py)
+## Настройки
 
-| Переменная | По умолчанию | Назначение |
-|------------|--------------|------------|
-| `RECOGNITION_THRESHOLD` | 0.55 | Порог косинусного сходства для «узнал человека» (выше — строже). |
-| `STRANGER_MIN_SCORE` | 0.20 | Ниже этого сходства детекция не считается «незнакомцем» (отсекаются ложные срабатывания). |
-| `GREET_COOLDOWN` | 10 | Секунд между приветствиями одного и того же человека. |
-| `CONFIRM_FRAMES` | 3 | Сколько кадров подряд нужно видеть человека перед приветствием. |
-| `WEB_PORT` | 8080 | Порт веб-интерфейса; 0 — выключен. |
+| Параметр | По умолчанию | CLI | Назначение |
+|----------|--------------|-----|------------|
+| `recognition_threshold` | 0.45 | `--threshold` | Порог косинусного сходства (выше — строже) |
+| `stranger_min_score` | 0.30 | — | Ниже — не считаем незнакомцем (отсечка ложных) |
+| `greet_cooldown` | 10 с | — | Пауза между приветствиями одного человека |
+| `confirm_frames` | 3 | — | Кадров подряд для подтверждения |
+| `score_window` | 7 | — | Окно сглаживания скора |
+| `web_event_cooldown` | 30 с | — | Минимальный интервал между одинаковыми событиями |
+| `stranger_confirm_delay` | 5 с | — | Задержка перед записью незнакомца |
+| `lang` | ru | `--lang` | Язык приветствий (ru / en) |
+| `web_port` | 8080 | `--port` | Порт веб-интерфейса (0 = выключен) |
 
 ## Автозапуск при загрузке системы
 
@@ -79,7 +107,6 @@ mkdir -p ~/.config/systemd/user
 cp /path/to/faces/faces.service ~/.config/systemd/user/
 
 # 2. Включить запуск без входа в систему (один раз!)
-# Важно: эту команду нужно выполнить с root (sudo)
 sudo loginctl enable-linger orangepi
 
 # 3. Включить и запустить сервис
@@ -90,39 +117,13 @@ systemctl --user start faces
 
 Полезные команды:
 
-- **Логи** — сервис пишет в файл `faces.log` в каталоге проекта (на Orange Pi user journal часто недоступен, поэтому логи в файле):
-  - следить в реальном времени: `tail -f ~/faces/faces.log`
-  - последние 200 строк: `tail -n 200 ~/faces/faces.log`
-  - с прокруткой (выход из follow: Ctrl+C, снова: F): `tail -f ~/faces/faces.log | less +F`
-- Перезапустить: `systemctl --user restart faces`
-- Остановить: `systemctl --user stop faces`
-- Отключить автозапуск: `systemctl --user disable faces`
+- **Логи**: `tail -f ~/faces/faces.log`
+- **Перезапустить**: `systemctl --user restart faces`
+- **Остановить**: `systemctl --user stop faces`
+- **Отключить автозапуск**: `systemctl --user disable faces`
 
 ### Если после перезагрузки сервис не запустился
 
-Зайди на Orange Pi **под пользователем orangepi** (под которым ставил сервис) и выполни по порядку:
-
-**1. Включён ли linger (без него user-сервисы при загрузке не стартуют):**
-```bash
-loginctl show-user $USER | grep Linger
-```
-Должно быть `Linger=yes`. Если `no` — один раз с root: `sudo loginctl enable-linger orangepi`, затем перезагрузка.
-
-**2. Включён ли сервис:**
-```bash
-systemctl --user is-enabled faces
-```
-Должно быть `enabled`. Если `disabled` — снова: `systemctl --user enable faces`.
-
-**3. Состояние сервиса и последние логи:**
-```bash
-systemctl --user status faces
-tail -n 80 ~/faces/faces.log
-```
-По статусу видно: active, failed или inactive. В логах — причина (камера, NPU, путь к venv и т.д.).
-
-**4. Запускался ли вообще user manager после загрузки:**
-```bash
-systemctl --user status
-```
-Если сервис inactive/failed — смотреть вывод `status` и конец `faces.log`.
+1. **Linger**: `loginctl show-user $USER | grep Linger` — должно быть `Linger=yes`
+2. **Enabled**: `systemctl --user is-enabled faces` — должно быть `enabled`
+3. **Статус**: `systemctl --user status faces` + `tail -n 80 ~/faces/faces.log`
