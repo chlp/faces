@@ -42,22 +42,29 @@ Multiple photos per person improve accuracy. Face must be clearly visible.
 
 ## Key architecture
 
-- `main.py` — single-file app, all logic here
+- `main.py` — entry point: main loop, event dispatch, encode pipeline
+- `config.py` — constants + `Config` dataclass + CLI arg parsing
+- `store.py` — `EventStore` (SQLite persistence)
+- `web.py` — `WebServer` + HTTP handler + HTML UI
+- `detection.py` — SCRFD/ArcFace RKNN wrappers, letterbox, anchor decoding
+- `facedb.py` — `FaceDB` (hot-reload) + `identify_face`
+- `tracker.py` — `FaceTracker` state machine
+- `ui.py` — font loading, face drawing, TTS (`speak`), camera open
 - `known_faces/` — face database, one subfolder per person
 - `models/` — RKNN model files (`scrfd.rknn`, `arcface.rknn`)
 - `data/` — runtime data (auto-created)
   - `faces.db` — SQLite event log (snapshots as BLOBs, auto-pruned to 15)
 
-### Classes in main.py
+### Key classes
 
-| Class | Role |
-|---|---|
-| `Config` | Dataclass with all tuning knobs. Populated from argparse + env vars (`FACE_PORT`, `FACE_THRESHOLD`, etc.) |
-| `EventStore` | SQLite persistence for detection events + snapshot BLOBs. Thread-safe (WAL mode) |
-| `WebServer` | `ThreadingHTTPServer` serving frames from memory (no disk I/O). Endpoints: `/frame.jpg`, `/detections.json`, `/snap/<id>.jpg`, `/health`, `/reload` |
-| `FaceDB` | Holds `known_encodings` + `name_index`. Watches `known_faces/` mtime every 30s. Hot-reloads via encode thread pause/resume protocol |
-| `FaceTracker` | State machine: streaks, pending stranger, greeting cooldowns. `update(face_results, frame) → list[event]` |
-| `FaceDetector` / `FaceEncoder` | RKNN model wrappers pinned to NPU Core0 / Core1 |
+| Class | Module | Role |
+|---|---|---|
+| `Config` | `config.py` | Dataclass with all tuning knobs. Populated from argparse + env vars (`FACE_PORT`, `FACE_THRESHOLD`, etc.) |
+| `EventStore` | `store.py` | SQLite persistence for detection events + snapshot BLOBs. Thread-safe (WAL mode) |
+| `WebServer` | `web.py` | `ThreadingHTTPServer` serving frames from memory (no disk I/O). Endpoints: `/frame.jpg`, `/detections.json`, `/snap/<id>.jpg`, `/health`, `/reload` |
+| `FaceDB` | `facedb.py` | Holds `known_encodings` + `name_index`. Watches `known_faces/` mtime every 30s. Hot-reloads via encode thread pause/resume protocol |
+| `FaceTracker` | `tracker.py` | State machine: streaks, pending stranger, greeting cooldowns. `update(face_results, frame) → list[event]` |
+| `FaceDetector` / `FaceEncoder` | `detection.py` | RKNN model wrappers pinned to NPU Core0 / Core1 |
 
 ### Thread model
 
