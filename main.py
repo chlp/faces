@@ -291,7 +291,9 @@ def _start_web_server():
 
 
 # ── Утилиты ──────────────────────────────────────────────────────────────────
-def letterbox(img, size=_SCRFD_INPUT, fill=(114, 114, 114)):
+def letterbox(img, size=None, fill=(114, 114, 114)):
+    if size is None:
+        size = _SCRFD_INPUT
     """Масштабирует с сохранением пропорций и добивает до квадрата."""
     h, w = img.shape[:2]
     scale = min(size / h, size / w)
@@ -317,24 +319,29 @@ def speak(text: str):
 
 
 def _draw_faces(frame, detected):
-    """Рисует рамки и Unicode-подписи. Один PIL-проход на кадр."""
+    """Рисует рамки и Unicode-подписи. PIL только для полоски подписи."""
     if not detected:
         return
-    # Рамки и залитые фоны подписей — через OpenCV (быстро)
+    h_frame, w_frame = frame.shape[:2]
     for bbox, name, score in detected:
         x1, y1, x2, y2 = map(int, bbox)
         color = (0, 200, 0) if name != UNKNOWN_LABEL else (0, 0, 200)
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-        cv2.rectangle(frame, (x1, y2 - 30), (x2, y2), color, cv2.FILLED)
-    # Текст с кириллицей — один PIL-проход для всех лиц
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    pil = Image.fromarray(rgb)
-    draw = ImageDraw.Draw(pil)
-    for bbox, name, score in detected:
-        x1, _, _, y2 = map(int, bbox)
-        draw.text((x1 + 6, y2 - 27), f"{name} {score:.2f}",
+        # Подпись: рисуем текст через PIL только на маленьком ROI (30px полоска)
+        lx1 = max(x1, 0)
+        ly1 = max(y2 - 30, 0)
+        lx2 = min(x2, w_frame)
+        ly2 = min(y2, h_frame)
+        if lx2 <= lx1 or ly2 <= ly1:
+            continue
+        cv2.rectangle(frame, (lx1, ly1), (lx2, ly2), color, cv2.FILLED)
+        roi = frame[ly1:ly2, lx1:lx2]
+        roi_rgb = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
+        pil = Image.fromarray(roi_rgb)
+        draw = ImageDraw.Draw(pil)
+        draw.text((6, 3), f"{name} {score:.2f}",
                   font=_UI_FONT, fill=(255, 255, 255))
-    frame[:] = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
+        frame[ly1:ly2, lx1:lx2] = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
 
 
 # ── SCRFD постобработка ──────────────────────────────────────────────────────
@@ -527,23 +534,24 @@ def load_known_faces(directory, detector: FaceDetector, encoder: FaceEncoder):
 
 
 # ── Распознавание ─────────────────────────────────────────────────────────────
-def identify_face(encoding, known_encodings, known_names):
+def _build_name_index(known_names):
+    """Индекс имя→список позиций. Строится один раз при загрузке базы."""
+    idx = {}
+    for i, nm in enumerate(known_names):
+        idx.setdefault(nm, []).append(i)
+    return idx
+
+
+def identify_face(encoding, known_encodings, known_names, name_index):
     if len(known_encodings) == 0:
-        return UNKNOWN_LABEL, 0.0, []
-    # Косинусное сходство (оба вектора уже L2-нормализованы → просто dot product)
+        return []
     sims = known_encodings @ encoding
-    best = int(np.argmax(sims))
-    score = float(sims[best])
-    name = known_names[best] if score >= RECOGNITION_THRESHOLD else UNKNOWN_LABEL
-    # Топ кандидаты для дебага
-    unique_names = sorted(set(known_names))
     top = []
-    for n in unique_names:
-        idxs = [i for i, nm in enumerate(known_names) if nm == n]
+    for n, idxs in name_index.items():
         best_n = float(max(sims[i] for i in idxs))
         top.append((n, best_n))
     top.sort(key=lambda x: -x[1])
-    return name, score, top
+    return top
 
 
 # ── Главный цикл ─────────────────────────────────────────────────────────────
@@ -561,6 +569,7 @@ def main():
 
     print("[*] Загрузка базы лиц...")
     known_encodings, known_names = load_known_faces(KNOWN_FACES_DIR, detector, encoder)
+    name_index = _build_name_index(known_names)
 
     def _open_camera():
         for idx in range(CAMERA_MAX_INDEX):
@@ -571,6 +580,9 @@ def main():
                     c.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
                     c.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
                     c.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    actual_w = int(c.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    actual_h = int(c.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    print(f"[*] Камера idx={idx}: разрешение {actual_w}×{actual_h}")
                     return c, idx
             c.release()
         return None, -1
@@ -612,7 +624,7 @@ def main():
                 if enc is None:
                     continue  # аффинное преобразование не удалось — геометрия лица вырожденная
 
-                _, _, top = identify_face(enc, known_encodings, known_names)
+                top = identify_face(enc, known_encodings, known_names, name_index)
 
                 if top:
                     best_cand, best_raw = top[0]
@@ -670,7 +682,18 @@ def main():
     _face_stranger_conf = False  # стрик незнакомца набран
     _face_has_known     = False  # знакомый виден в последнем result
 
-    while True:
+    _running = True
+
+    def _on_signal(sig, _frame):
+        nonlocal _running
+        _running = False
+        print(f"\n[*] Получен сигнал {sig}, завершаем...")
+
+    import signal
+    signal.signal(signal.SIGINT, _on_signal)
+    signal.signal(signal.SIGTERM, _on_signal)
+
+    while _running:
         ret, frame = cap.read()
         if not ret:
             no_frame_count += 1
@@ -809,18 +832,19 @@ def main():
         _draw_faces(frame, detected)
 
         if WEB_PORT:
+            frame_snap = frame.copy()
             # Заморозка стрима: незнакомец — показываем его последний кадр даже после ухода;
             # знакомый опознан — возвращаемся к живому кадру.
             if _face_has_known:
                 _use_stranger_freeze = False
             elif _face_has_stranger:
                 with _stranger_freeze_lock:
-                    _stranger_freeze_frame = frame.copy()
+                    _stranger_freeze_frame = frame_snap
                 if _face_stranger_conf:
                     _use_stranger_freeze = True
 
             with _latest_frame_lock:
-                _latest_frame_bgr = frame.copy()
+                _latest_frame_bgr = frame_snap
 
         if SHOW_DISPLAY:
             cv2.imshow("Faces", frame)
