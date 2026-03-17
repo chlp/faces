@@ -210,6 +210,8 @@ class EventStore:
     def clear(self):
         with self._lock:
             self._conn.execute("DELETE FROM events")
+            self._conn.commit()
+            # VACUUM must run outside an active transaction
             self._conn.execute("VACUUM")
             self._conn.commit()
 
