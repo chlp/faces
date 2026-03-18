@@ -62,12 +62,12 @@ def main():
         event_store.last_greeted_times(cfg.greet_cooldown)
     )
 
-    cap, _ = open_camera(cfg)
-    if cap is None:
-        print("[!] Камера не найдена")
-        detector.release()
-        encoder.release()
-        return
+    cap = None
+    while cap is None:
+        cap, _ = open_camera(cfg)
+        if cap is None:
+            print("[!] Камера не найдена, повтор через 5 с...")
+            time.sleep(5)
 
     # ── async encode pipeline (Core1) ────────────────────────────────────
     _enc_in: queue.Queue = queue.Queue(maxsize=2)
@@ -171,9 +171,10 @@ def main():
                 cap.release()
                 time.sleep(cfg.no_frame_reconnect_delay)
                 cap, _ = open_camera(cfg)
-                if cap is None:
-                    print("[!] Камера не найдена")
-                    break
+                while cap is None:
+                    print("[!] Камера не найдена, повтор через 5 с...")
+                    time.sleep(5)
+                    cap, _ = open_camera(cfg)
                 no_frame_count = 0
             time.sleep(0.1)
             continue
