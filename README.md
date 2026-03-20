@@ -1,129 +1,129 @@
 # faces
 
-Приложение для Orange Pi 5 Max (RK3588): камера смотрит на вход, узнаёт людей по лицу и приветствует их по имени через espeak-ng. Детекция и распознавание — на NPU (модели SCRFD + ArcFace в формате RKNN).
+Face recognition app for Orange Pi 5 Max (RK3588): a camera watches the entrance, recognizes people by face and greets them by name via espeak-ng. Detection and recognition run on the NPU (SCRFD + ArcFace models in RKNN format).
 
-## Что внутри
+## What's inside
 
-- `main.py` — основное приложение (один файл, вся логика)
-- `known_faces/` — база лиц: одна папка на человека, внутри — фото (`.jpg` / `.png`)
-- `models/` — RKNN-модели (скачиваются скриптом `download_models.sh`)
-- `data/` — рантайм-данные (создаётся автоматически)
-  - `faces.db` — SQLite: лог событий + снапшоты (BLOB), авто-прунинг до 15 записей
-- `install.sh` — установка системных зависимостей и Python-окружения на Orange Pi
-- `download_models.sh` — загрузка моделей SCRFD и ArcFace из rknn_model_zoo
-- `requirements.txt` — Python-пакеты (opencv, numpy, Pillow и т.д.)
+- `main.py` — main application (entry point, core logic)
+- `known_faces/` — face database: one folder per person, containing photos (`.jpg` / `.png`)
+- `models/` — RKNN models (downloaded via `download_models.sh`)
+- `data/` — runtime data (auto-created)
+  - `faces.db` — SQLite: event log + snapshots (BLOBs), auto-pruned to 15 entries
+- `install.sh` — installs system dependencies and Python environment on Orange Pi
+- `download_models.sh` — downloads SCRFD and ArcFace models from rknn_model_zoo
+- `requirements.txt` — Python packages (opencv, numpy, Pillow, etc.)
 
-## Быстрый старт
+## Quick start
 
 ```bash
-# 1. Установить зависимости (системные пакеты + venv + pip)
+# 1. Install dependencies (system packages + venv + pip)
 chmod +x install.sh && ./install.sh
 
-# 2. RKNN runtime не в PyPI — скачать .whl вручную и положить в каталог проекта:
+# 2. RKNN runtime is not on PyPI — download the .whl manually and place it in the project directory:
 #    https://github.com/airockchip/rknn-toolkit2/tree/master/rknn-toolkit-lite2/packages
-#    (выбрать файл под свою архитектуру, например linux_aarch64)
+#    (pick the file for your architecture, e.g. linux_aarch64)
 
-# 3. Скачать модели детекции и распознавания
+# 3. Download detection and recognition models
 ./download_models.sh
 
-# 4. Добавить себя в базу
-mkdir -p known_faces/Алексей
-cp ~/фото.jpg known_faces/Алексей/photo.jpg
+# 4. Add yourself to the database
+mkdir -p known_faces/Alice
+cp ~/photo.jpg known_faces/Alice/photo.jpg
 
-# 5. Запустить
+# 5. Run
 source venv/bin/activate
 python3 main.py
 ```
 
-## CLI-аргументы
+## CLI arguments
 
 ```bash
-python3 main.py                                    # всё по умолчанию
-python3 main.py --port 9090 --threshold 0.50       # другой порт и порог
-python3 main.py --lang en --no-tts                  # английский, без озвучки
-python3 main.py --camera 2 --data-dir /mnt/data     # конкретная камера, другой каталог данных
-python3 main.py --no-web --display                   # без веба, с окном OpenCV
-python3 main.py --no-debug                           # без debug-вывода в консоль
+python3 main.py                                    # all defaults
+python3 main.py --port 9090 --threshold 0.50       # custom port and threshold
+python3 main.py --lang en --no-tts                  # English, no TTS
+python3 main.py --camera 2 --data-dir /mnt/data     # specific camera, custom data dir
+python3 main.py --no-web --display                   # no web server, OpenCV window
+python3 main.py --no-debug                           # no debug output to console
 ```
 
-Env-переменные (задают умолчания, CLI имеет приоритет):
+Environment variables (set defaults; CLI takes priority):
 `FACE_PORT`, `FACE_THRESHOLD`, `FACE_LANG`, `FACE_CAMERA`, `FACE_DATA_DIR`
 
-## Веб-интерфейс
+## Web interface
 
-В браузере: `http://<ip-orange-pi>:8080`
+Open in a browser: `http://<orange-pi-ip>:8080`
 
-Показывает живой кадр с камеры (~3 fps) и последние 15 событий с миниатюрами. Кадры отдаются из памяти (без записи на диск). Кнопка `↻` перезагружает базу лиц без рестарта.
+Shows a live camera feed (~3 fps) and the last 15 events with thumbnails. Frames are served from memory (no disk writes). The `↻` button reloads the face database without restarting.
 
-### Эндпоинты
+### Endpoints
 
-| Endpoint | Описание |
+| Endpoint | Description |
 |---|---|
-| `GET /` | Веб-UI |
-| `GET /frame.jpg` | Живой JPEG-кадр (из памяти) |
-| `GET /detections.json` | Последние события (JSON) |
-| `GET /snap/<id>.jpg` | Снапшот события (BLOB из SQLite) |
-| `GET /health` | Статус: `{uptime_s, last_detection_ts, frame_jpeg_bytes}` |
-| `GET /reload` | Перезагрузить базу лиц (hot-reload) |
-| `GET /clear` | Удалить все события и снапшоты из БД |
-| `GET /debug/aligned.jpg` | Последнее выровненное лицо (дебаг) |
+| `GET /` | Web UI |
+| `GET /frame.jpg` | Live JPEG frame (from memory) |
+| `GET /detections.json` | Recent events (JSON) |
+| `GET /snap/<id>.jpg` | Event snapshot (BLOB from SQLite) |
+| `GET /health` | Status: `{uptime_s, last_detection_ts, frame_jpeg_bytes}` |
+| `GET /reload` | Reload face database (hot-reload) |
+| `GET /clear` | Delete all events and snapshots from DB |
+| `GET /debug/aligned.jpg` | Last aligned face (debug) |
 
-## Добавление новых людей
+## Adding new people
 
-Создай папку с именем человека и положи туда одно или несколько фото (лицо хорошо видно):
+Create a folder with the person's name and put one or more photos inside (face clearly visible):
 
 ```
 known_faces/
-  Алексей/
+  Alice/
     photo.jpg
-  Мария/
+  Bob/
     photo.jpg
     photo2.jpg
 ```
 
-База перезагружается автоматически каждые 30 секунд при изменении файлов, либо по кнопке `↻` в веб-UI, либо через `GET /reload`.
+The database reloads automatically every 30 seconds when files change, or via the `↻` button in the web UI, or through `GET /reload`.
 
-## Настройки
+## Settings
 
-| Параметр | По умолчанию | CLI | Назначение |
-|----------|--------------|-----|------------|
-| `recognition_threshold` | 0.45 | `--threshold` | Порог косинусного сходства (выше — строже) |
-| `stranger_min_score` | 0.30 | — | Ниже — не считаем незнакомцем (отсечка ложных) |
-| `greet_cooldown` | 10 с | — | Пауза между приветствиями одного человека |
-| `confirm_frames` | 3 | — | Кадров подряд для подтверждения |
-| `score_window` | 7 | — | Окно сглаживания скора |
-| `web_event_cooldown` | 30 с | — | Минимальный интервал между одинаковыми событиями |
-| `stranger_confirm_delay` | 5 с | — | Задержка перед записью незнакомца |
-| `lang` | ru | `--lang` | Язык приветствий (ru / en) |
-| `web_port` | 8080 | `--port` | Порт веб-интерфейса (0 = выключен) |
+| Parameter | Default | CLI | Description |
+|-----------|---------|-----|-------------|
+| `recognition_threshold` | 0.45 | `--threshold` | Cosine similarity cutoff (higher = stricter) |
+| `stranger_min_score` | 0.30 | — | Below this — not counted as a stranger (filters false positives) |
+| `greet_cooldown` | 10 s | — | Pause between greetings for the same person |
+| `confirm_frames` | 3 | — | Consecutive frames required for confirmation |
+| `score_window` | 7 | — | Score smoothing window |
+| `web_event_cooldown` | 30 s | — | Minimum interval between identical events |
+| `stranger_confirm_delay` | 5 s | — | Delay before recording a stranger |
+| `lang` | ru | `--lang` | Greeting language (ru / en) |
+| `web_port` | 8080 | `--port` | Web interface port (0 = disabled) |
 
-## Автозапуск при загрузке системы
+## Autostart on boot
 
-На Orange Pi под пользователем `orangepi`:
+On Orange Pi under the `orangepi` user:
 
 ```bash
-# 1. Скопировать unit в пользовательский systemd
+# 1. Copy the unit to user systemd
 mkdir -p ~/.config/systemd/user
 cp /path/to/faces/faces.service ~/.config/systemd/user/
 
-# 2. Включить запуск без входа в систему (один раз!)
+# 2. Enable lingering (once!)
 sudo loginctl enable-linger orangepi
 
-# 3. Включить и запустить сервис
+# 3. Enable and start the service
 systemctl --user daemon-reload
 systemctl --user enable faces
 systemctl --user start faces
 ```
 
-Полезные команды:
+Useful commands:
 
-- **Логи**: `tail -f ~/faces/faces.log`
-- **Перезапустить**: `systemctl --user restart faces`
-- **Остановить**: `systemctl --user stop faces`
-- **Отключить автозапуск**: `systemctl --user disable faces`
+- **Logs**: `tail -f ~/faces/faces.log`
+- **Restart**: `systemctl --user restart faces`
+- **Stop**: `systemctl --user stop faces`
+- **Disable autostart**: `systemctl --user disable faces`
 
-### Если после перезагрузки сервис не запустился
+### If the service doesn't start after reboot
 
-1. **Linger**: `loginctl show-user $USER | grep Linger` — должно быть `Linger=yes`
-2. **Enabled**: `systemctl --user is-enabled faces` — должно быть `enabled`
-3. **Статус**: `systemctl --user status faces` + `tail -n 80 ~/faces/faces.log`
+1. **Linger**: `loginctl show-user $USER | grep Linger` — should be `Linger=yes`
+2. **Enabled**: `systemctl --user is-enabled faces` — should be `enabled`
+3. **Status**: `systemctl --user status faces` + `tail -n 80 ~/faces/faces.log`
