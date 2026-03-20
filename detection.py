@@ -9,9 +9,9 @@ from rknnlite.api import RKNNLite
 import config as cfg
 
 
-# ── Утилиты ──────────────────────────────────────────────────────────────────
+# ── Utilities ────────────────────────────────────────────────────────────────
 def letterbox(img, size=None, fill=(114, 114, 114)):
-    """Масштабирует с сохранением пропорций и добивает до квадрата."""
+    """Scale with aspect ratio preserved and pad to square."""
     if size is None:
         size = cfg._SCRFD_INPUT
     h, w = img.shape[:2]
@@ -24,7 +24,7 @@ def letterbox(img, size=None, fill=(114, 114, 114)):
     return out, scale, (pad_w, pad_h)
 
 
-# ── Якоря ────────────────────────────────────────────────────────────────────
+# ── Anchors ──────────────────────────────────────────────────────────────────
 def _build_anchor_centers(input_size=None):
     if input_size is None:
         input_size = cfg._SCRFD_INPUT
@@ -40,7 +40,7 @@ def _build_anchor_centers(input_size=None):
 _ANCHORS = _build_anchor_centers()
 
 
-# ── SCRFD постобработка ─────────────────────────────────────────────────────
+# ── SCRFD post-processing ────────────────────────────────────────────────────
 def _is_frontal(kps) -> tuple:
     left_eye, right_eye, nose = kps[0], kps[1], kps[2]
     eye_dist = abs(right_eye[0] - left_eye[0])
@@ -103,15 +103,15 @@ def _decode_scrfd(outputs, scale, pad):
     return result
 
 
-# ── RKNN обёртки ─────────────────────────────────────────────────────────────
+# ── RKNN wrappers ────────────────────────────────────────────────────────────
 class _RKNNModel:
     def __init__(self, path, core_mask=None):
         self.net = RKNNLite()
         if self.net.load_rknn(path) != 0:
-            raise RuntimeError(f"Не удалось загрузить модель: {path}")
+            raise RuntimeError(f"Failed to load model: {path}")
         kwargs = {} if core_mask is None else {"core_mask": core_mask}
         if self.net.init_runtime(**kwargs) != 0:
-            raise RuntimeError("Ошибка init_runtime RKNN")
+            raise RuntimeError("RKNN init_runtime error")
 
     def _run(self, inputs):
         return self.net.inference(inputs=inputs)
@@ -134,7 +134,7 @@ class FaceDetector(_RKNNModel):
                     _ANCHORS = _build_anchor_centers(candidate)
                 break
         else:
-            raise RuntimeError("Не удалось определить размер SCRFD")
+            raise RuntimeError("Failed to determine SCRFD input size")
 
     def detect(self, frame):
         img, scale, pad = letterbox(frame)

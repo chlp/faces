@@ -1,4 +1,4 @@
-"""Константы и конфигурация."""
+"""Constants and configuration."""
 
 import argparse
 import os
@@ -6,12 +6,12 @@ from dataclasses import dataclass
 
 import numpy as np
 
-# ── Константы моделей ────────────────────────────────────────────────────────
+# ── Model constants ──────────────────────────────────────────────────────────
 SCRFD_MODEL   = "models/scrfd.rknn"
 ARCFACE_MODEL = "models/arcface.rknn"
 
 GREETINGS      = {"ru": "Привет, {}!", "en": "Hello, {}!"}
-UNKNOWN_LABEL  = "Незнакомец"
+UNKNOWN_LABEL  = "Stranger"
 ESPEAK_ARGS    = {"ru": ["-v", "ru", "-s", "140"], "en": ["-v", "en"]}
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
 
@@ -33,7 +33,7 @@ RELOAD_CHECK_S = 30.0
 DEBUG_INTERVAL = 5.0
 
 
-# ── Конфигурация ─────────────────────────────────────────────────────────────
+# ── Configuration ────────────────────────────────────────────────────────────
 @dataclass
 class Config:
     known_faces_dir: str = "known_faces"

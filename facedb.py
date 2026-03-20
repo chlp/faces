@@ -9,7 +9,7 @@ import numpy as np
 from config import IMAGE_SUFFIXES
 
 
-# ── Распознавание ────────────────────────────────────────────────────────────
+# ── Recognition ──────────────────────────────────────────────────────────────
 def identify_face(encoding, known_encodings, name_index):
     if len(known_encodings) == 0:
         return []
@@ -22,12 +22,12 @@ def identify_face(encoding, known_encodings, name_index):
     return top
 
 
-# ── Загрузка из каталога ─────────────────────────────────────────────────────
+# ── Load from directory ──────────────────────────────────────────────────────
 def _load_faces_from_dir(directory, detector, encoder):
     encodings, names = [], []
     faces_dir = Path(directory)
     if not faces_dir.is_dir():
-        print(f"[!] Папка {directory} не найдена.")
+        print(f"[!] Directory {directory} not found.")
         return np.empty((0, 512), dtype=np.float32), []
     for person_dir in sorted(faces_dir.iterdir()):
         if not person_dir.is_dir():
@@ -41,7 +41,7 @@ def _load_faces_from_dir(directory, detector, encoder):
                 continue
             dets = detector.detect(img)
             if not dets:
-                print(f"[!] Лицо не найдено: {photo}")
+                print(f"[!] No face found: {photo}")
                 continue
             bbox, kps = max(
                 dets, key=lambda d: (d[0][2] - d[0][0]) * (d[0][3] - d[0][1])
@@ -53,7 +53,7 @@ def _load_faces_from_dir(directory, detector, encoder):
             names.append(person_dir.name)
             loaded += 1
         if loaded:
-            print(f"[+] {person_dir.name}: {loaded} фото")
+            print(f"[+] {person_dir.name}: {loaded} photo(s)")
     mat = (
         np.array(encodings, dtype=np.float32)
         if encodings
@@ -95,7 +95,7 @@ class FaceDB:
         return self._dir_mtime() > self._last_mtime
 
     def reload(self):
-        print("[*] Загрузка базы лиц...")
+        print("[*] Loading face database...")
         encs, names = _load_faces_from_dir(
             self.directory, self._detector, self._encoder
         )
@@ -108,7 +108,7 @@ class FaceDB:
             self._name_index = idx
         self._last_mtime = self._dir_mtime()
         self._reload_flag = False
-        print(f"[*] База: {len(set(names))} чел., {len(names)} фото")
+        print(f"[*] Database: {len(set(names))} person(s), {len(names)} photo(s)")
 
     def _dir_mtime(self) -> float:
         root = Path(self.directory)

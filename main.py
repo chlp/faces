@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Распознавание лиц на NPU (RKNN) — Orange Pi 5 Max / RK3588.
-Детекция: SCRFD-10G  |  Энкодинг: ArcFace ResNet100 (Glint360K)
-Скачать модели: bash download_models.sh
+Face recognition on NPU (RKNN) — Orange Pi 5 Max / RK3588.
+Detection: SCRFD-10G  |  Encoding: ArcFace ResNet100 (Glint360K)
+Download models: bash download_models.sh
 """
 
 import os
@@ -27,7 +27,7 @@ from ui import draw_faces, open_camera, speak
 from web import WebServer
 
 
-# ── Диспетчер событий ────────────────────────────────────────────────────────
+# ── Event dispatcher ─────────────────────────────────────────────────────────
 def _dispatch(ev, cfg, event_store, web):
     if ev[0] == "greet" and not cfg.no_tts:
         greeting = GREETINGS[cfg.lang].format(ev[1])
@@ -43,7 +43,7 @@ def _dispatch(ev, cfg, event_store, web):
             web.notify_detection()
 
 
-# ── Главный цикл ────────────────────────────────────────────────────────────
+# ── Main loop ───────────────────────────────────────────────────────────────
 def main():
     cfg = parse_args()
     os.makedirs(cfg.data_dir, exist_ok=True)
@@ -51,13 +51,13 @@ def main():
     event_store = EventStore(cfg.db_path)
     web = WebServer(cfg.web_port, event_store) if cfg.web_port else None
 
-    print("[*] Инициализация NPU...")
+    print("[*] Initializing NPU...")
     detector = FaceDetector(SCRFD_MODEL, core_mask=1)
     encoder = FaceEncoder(ARCFACE_MODEL, core_mask=2)
     face_db = FaceDB(cfg.known_faces_dir, detector, encoder)
     tracker = FaceTracker(cfg)
 
-    # восстанавливаем last_greeted из БД (не здороваемся повторно после рестарта)
+    # restore last_greeted from DB (avoid re-greeting after restart)
     tracker.last_greeted.update(
         event_store.last_greeted_times(cfg.greet_cooldown)
     )
@@ -66,7 +66,7 @@ def main():
     while cap is None:
         cap, _ = open_camera(cfg)
         if cap is None:
-            print("[!] Камера не найдена, повтор через 5 с...")
+            print("[!] Camera not found, retrying in 5 s...")
             time.sleep(5)
 
     # ── async encode pipeline (Core1) ────────────────────────────────────
@@ -81,7 +81,7 @@ def main():
                 break
             if item == "pause":
                 _enc_out.put("paused")
-                _enc_in.get()  # ждём "resume"
+                _enc_in.get()  # wait for "resume"
                 score_hist.clear()
                 continue
 
@@ -96,7 +96,7 @@ def main():
                     if cfg.debug:
                         print(
                             f"[D] {time.strftime('%H:%M:%S')} "
-                            f"профиль offset={offset:.3f}"
+                            f"profile offset={offset:.3f}"
                         )
                     continue
                 enc, aligned = encoder.encode(frm, kps)
@@ -151,12 +151,12 @@ def main():
     def _on_signal(sig, _):
         nonlocal _running
         _running = False
-        print(f"\n[*] Сигнал {sig}, завершаем...")
+        print(f"\n[*] Signal {sig}, shutting down...")
 
     signal.signal(signal.SIGINT, _on_signal)
     signal.signal(signal.SIGTERM, _on_signal)
 
-    print("[*] Запуск. Q — выход.")
+    print("[*] Starting. Q to quit.")
     frame_count = 0
     no_frame_count = 0
     last_reload_check = time.time()
@@ -167,12 +167,12 @@ def main():
         if not ret:
             no_frame_count += 1
             if no_frame_count >= cfg.no_frame_reconnect_after:
-                print("[*] Переподключение камеры...")
+                print("[*] Reconnecting camera...")
                 cap.release()
                 time.sleep(cfg.no_frame_reconnect_delay)
                 cap, _ = open_camera(cfg)
                 while cap is None:
-                    print("[!] Камера не найдена, повтор через 5 с...")
+                    print("[!] Camera not found, retrying in 5 s...")
                     time.sleep(5)
                     cap, _ = open_camera(cfg)
                 no_frame_count = 0
@@ -253,7 +253,7 @@ def main():
     if web:
         web.shutdown()
     event_store.close()
-    print("[*] Завершено.")
+    print("[*] Done.")
 
 
 if __name__ == "__main__":

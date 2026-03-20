@@ -11,7 +11,7 @@ from PIL import Image, ImageDraw, ImageFont
 from config import Config, ESPEAK_ARGS, UNKNOWN_LABEL
 
 
-# ── Шрифт ────────────────────────────────────────────────────────────────────
+# ── Font ─────────────────────────────────────────────────────────────────────
 def _load_ui_font(size: int = 20):
     for path in [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -21,9 +21,9 @@ def _load_ui_font(size: int = 20):
         "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
     ]:
         if os.path.exists(path):
-            print(f"[*] Шрифт: {path}")
+            print(f"[*] Font: {path}")
             return ImageFont.truetype(path, size)
-    print("[!] TTF-шрифт не найден, кириллица может не отображаться")
+    print("[!] TTF font not found, Cyrillic may not render")
     return ImageFont.load_default()
 
 
@@ -39,15 +39,15 @@ def speak(text: str, lang: str = "ru"):
                 check=True, capture_output=True,
             )
         except FileNotFoundError:
-            print(f"[!] espeak-ng не установлен: {text}")
+            print(f"[!] espeak-ng not installed: {text}")
         except subprocess.CalledProcessError as e:
             print(f"[!] TTS: {e}")
     threading.Thread(target=_run, daemon=True).start()
 
 
-# ── Отрисовка рамок ─────────────────────────────────────────────────────────
+# ── Face drawing ─────────────────────────────────────────────────────────────
 def draw_faces(frame, detected):
-    """Рисует рамки и подписи сбоку (слева или справа, в зависимости от края)."""
+    """Draw bounding boxes and labels to the side (left or right depending on edge)."""
     if not detected:
         return
     h_frame, w_frame = frame.shape[:2]
@@ -82,7 +82,7 @@ def draw_faces(frame, detected):
         )
 
 
-# ── Камера ───────────────────────────────────────────────────────────────────
+# ── Camera ───────────────────────────────────────────────────────────────────
 def open_camera(cfg: Config):
     indices = (
         [cfg.camera_index]
@@ -99,7 +99,7 @@ def open_camera(cfg: Config):
                 c.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 w = int(c.get(cv2.CAP_PROP_FRAME_WIDTH))
                 h = int(c.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                print(f"[*] Камера idx={idx}: {w}x{h}")
+                print(f"[*] Camera idx={idx}: {w}x{h}")
                 return c, idx
         c.release()
     return None, -1

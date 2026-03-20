@@ -101,15 +101,15 @@ class FaceTracker:
                             if self.cfg.debug:
                                 print(
                                     f"[D] {time.strftime('%H:%M:%S')} "
-                                    f"незнакомец в ожидании "
-                                    f"({self.cfg.stranger_confirm_delay:.0f}с)..."
+                                    f"stranger pending "
+                                    f"({self.cfg.stranger_confirm_delay:.0f}s)..."
                                 )
                 else:
                     self._pending_stranger = None
                     if self.cfg.debug:
                         print(
                             f"[D] {time.strftime('%H:%M:%S')} "
-                            f"кадр {self._frame_count}: лиц нет"
+                            f"frame {self._frame_count}: no faces"
                         )
                 self._last_state = cur_state
                 self._last_heartbeat = time.time()
@@ -127,7 +127,7 @@ class FaceTracker:
                 if self.cfg.debug:
                     print(
                         f"[D] {time.strftime('%H:%M:%S')} "
-                        f"незнакомец (pre-streak) в ожидании..."
+                        f"stranger (pre-streak) pending..."
                     )
             elif (
                 self.cfg.debug
@@ -137,11 +137,11 @@ class FaceTracker:
             ):
                 print(
                     f"[D] {time.strftime('%H:%M:%S')} "
-                    f"кадр {self._frame_count}: лиц нет"
+                    f"frame {self._frame_count}: no faces"
                 )
                 self._last_heartbeat = time.time()
 
-        # stranger timer (каждый кадр)
+        # stranger timer (every frame)
         if self._pending_stranger is not None:
             sf, sd, st, sn, sk = self._pending_stranger
             if time.time() - st >= self.cfg.stranger_confirm_delay:
@@ -153,7 +153,7 @@ class FaceTracker:
                 if self.cfg.debug:
                     print(
                         f"[D] {time.strftime('%H:%M:%S')} "
-                        f"незнакомец подтверждён → событие"
+                        f"stranger confirmed -> event"
                     )
 
         return events

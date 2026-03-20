@@ -12,10 +12,10 @@ from store import EventStore
 
 # ── HTML ─────────────────────────────────────────────────────────────────────
 _HTML = """<!DOCTYPE html>
-<html lang="ru"><head>
+<html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Камера</title>
+<title>Camera</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;background:#0a0a0a;color:#e0e0e0;
@@ -41,13 +41,13 @@ header span{font-size:.75rem;font-weight:600;color:#555;letter-spacing:.08em;tex
 #live-label{font-size:.65rem;color:#555;padding:4px 7px;flex-shrink:0;text-align:center}
 </style></head><body>
 <header>
-  <span id="dot"></span><span>Камера</span>
+  <span id="dot"></span><span>Camera</span>
   <button id="rbtn" onclick="fetch('/reload').then(r=>r.json()).then(d=>{this.textContent='OK';setTimeout(()=>this.textContent='↻',2000)}).catch(()=>this.textContent='✗')">↻</button>
 </header>
 <div id="grid">
   <div class="cell" id="cell-live">
     <img id="cam" alt="">
-    <div id="live-label">прямой эфир</div>
+    <div id="live-label">live</div>
   </div>
 </div>
 <script>
@@ -88,15 +88,15 @@ function rebuild(evs){
       img.dataset.ts=ev.ts;
       img.src='snap/'+ev.img+'.jpg?t='+ev.ts;
     }
-    const kn=ev.names.filter(n=>n!=='Незнакомец');
-    const un=ev.names.filter(n=>n==='Незнакомец').length;
+    const kn=ev.names.filter(n=>n!=='Stranger');
+    const un=ev.names.filter(n=>n==='Stranger').length;
     const total=ev.names.length;
     const hasKnown=kn.length>0;
     let label=kn.join(', ');
-    if(un>0)label+=(label?'\u00a0+\u00a0':'')+(un===1?'незн.':un+'\u00a0незн.');
+    if(un>0)label+=(label?'\u00a0+\u00a0':'')+(un===1?'unk.':un+'\u00a0unk.');
     nm.className='names '+(hasKnown?'k':'u');
-    nm.textContent=label||'Незнакомец';
-    meta.innerHTML='<span>'+fmtDate(ev.ts)+'</span><span class="count">'+total+'\u00a0чел.</span>';
+    nm.textContent=label||'Stranger';
+    meta.innerHTML='<span>'+fmtDate(ev.ts)+'</span><span class="count">'+total+'\u00a0ppl.</span>';
   });
 }
 function poll(){
@@ -194,7 +194,7 @@ class WebServer:
         self._httpd = httpd
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         threading.Thread(target=self._frame_writer, daemon=True).start()
-        print(f"[*] Веб: http://0.0.0.0:{port}")
+        print(f"[*] Web: http://0.0.0.0:{port}")
 
     def update_source(self, frame, has_known, has_stranger, stranger_conf):
         snap = frame.copy()
