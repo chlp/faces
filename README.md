@@ -97,6 +97,20 @@ The database reloads automatically every 30 seconds when files change, or via th
 | `lang` | ru | `--lang` | Greeting language (ru / en) |
 | `web_port` | 8080 | `--port` | Web interface port (0 = disabled) |
 
+## Resource monitoring
+
+Useful checks while the app is running on the board:
+
+- **[btop](https://github.com/aristocratos/btop)** — interactive view of CPU, memory, disks, network, and top processes. Install on Debian/Ubuntu: `sudo apt install btop`, then run `btop`.
+
+- **NPU load** — RK3588 exposes driver stats under debugfs. Refresh once per second:
+
+  ```bash
+  watch -n 1 'cat /sys/kernel/debug/rknpu/load'
+  ```
+
+  You may need `sudo` if the path is not readable for your user. If the file is missing, ensure `debugfs` is mounted (often on `/sys/kernel/debug`) and that a kernel/driver build exposes this node.
+
 ## Autostart on boot
 
 On Orange Pi under the `orangepi` user:
