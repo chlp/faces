@@ -1,6 +1,7 @@
 """SCRFD detection + ArcFace encoding (RKNN wrappers)."""
 
 import math
+import time
 
 import cv2
 import numpy as np
@@ -105,7 +106,8 @@ def _decode_scrfd(outputs, scale, pad):
 
 # ── RKNN wrappers ────────────────────────────────────────────────────────────
 class _RKNNModel:
-    def __init__(self, path, core_mask=None):
+    def __init__(self, path, core_mask=None, metrics=None):
+        self._metrics = metrics
         self.net = RKNNLite()
         if self.net.load_rknn(path) != 0:
             raise RuntimeError(f"Failed to load model: {path}")
@@ -121,9 +123,9 @@ class _RKNNModel:
 
 
 class FaceDetector(_RKNNModel):
-    def __init__(self, path, core_mask=None):
+    def __init__(self, path, core_mask=None, metrics=None):
         global _ANCHORS
-        super().__init__(path, core_mask=core_mask)
+        super().__init__(path, core_mask=core_mask, metrics=metrics)
         for candidate in [640, 480, 360, 320]:
             probe = np.zeros((1, candidate, candidate, 3), dtype=np.uint8)
             outs = self._run([probe])
@@ -137,13 +139,27 @@ class FaceDetector(_RKNNModel):
             raise RuntimeError("Failed to determine SCRFD input size")
 
     def detect(self, frame):
+        t0 = time.perf_counter()
         img, scale, pad = letterbox(frame)
         inp = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        return _decode_scrfd(self._run([inp[np.newaxis]]), scale, pad)
+        t_npu0 = time.perf_counter()
+        outs = self._run([inp[np.newaxis]])
+        t_npu1 = time.perf_counter()
+        result = _decode_scrfd(outs, scale, pad)
+        t1 = time.perf_counter()
+        if self._metrics:
+            self._metrics.record_detection(
+                t_npu1 - t_npu0, t1 - t_npu1, t1 - t0
+            )
+        return result
 
 
 class FaceEncoder(_RKNNModel):
+    def __init__(self, path, core_mask=None, metrics=None):
+        super().__init__(path, core_mask=core_mask, metrics=metrics)
+
     def encode(self, frame, kps):
+        t0 = time.perf_counter()
         M, _ = cv2.estimateAffinePartial2D(
             kps, cfg._ARCFACE_TPL, method=cv2.LMEDS
         )
@@ -151,7 +167,11 @@ class FaceEncoder(_RKNNModel):
             return None, None
         aligned = cv2.warpAffine(frame, M, (112, 112), borderValue=0.0)
         inp = cv2.cvtColor(aligned, cv2.COLOR_BGR2RGB)
+        t_npu0 = time.perf_counter()
         emb = self._run([inp[np.newaxis]])[0].flatten()
+        t_npu1 = time.perf_counter()
+        if self._metrics:
+            self._metrics.record_encode_face(t_npu1 - t_npu0, t_npu0 - t0)
         norm = np.linalg.norm(emb)
         enc = emb / norm if norm > 0 else None
         return enc, aligned

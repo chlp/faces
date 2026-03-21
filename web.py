@@ -175,8 +175,16 @@ class _WebHandler(http.server.BaseHTTPRequestHandler):
 
 
 class WebServer:
-    def __init__(self, port: int, event_store: EventStore):
+    def __init__(
+        self,
+        port: int,
+        event_store: EventStore,
+        metrics=None,
+        enc_queue=None,
+    ):
         self.event_store = event_store
+        self.metrics = metrics
+        self._enc_queue = enc_queue
         self.reload_requested = threading.Event()
         self._frame_jpeg: bytes | None = None
         self._frame_lock = threading.Lock()
@@ -219,10 +227,21 @@ class WebServer:
             return self._frame_jpeg
 
     def get_health(self) -> dict:
+        qsz, qmax = 0, 0
+        if self._enc_queue is not None:
+            try:
+                qsz = self._enc_queue.qsize()
+            except NotImplementedError:
+                pass
+            qmax = getattr(self._enc_queue, "maxsize", 0) or 0
+        m: dict = {}
+        if self.metrics is not None:
+            m = self.metrics.snapshot(qsz, qmax)
         return {
             "uptime_s": round(time.time() - self._start_time),
             "last_detection_ts": self._last_detect_ts,
             "frame_jpeg_bytes": len(self._frame_jpeg) if self._frame_jpeg else 0,
+            "metrics": m,
         }
 
     def shutdown(self):

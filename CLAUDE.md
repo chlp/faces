@@ -114,7 +114,7 @@ Env vars: `FACE_PORT`, `FACE_THRESHOLD`, `FACE_LANG`, `FACE_CAMERA`, `FACE_DATA_
 | `GET /frame.jpg` | Live JPEG frame (from memory, ~3fps) |
 | `GET /detections.json` | Recent events JSON |
 | `GET /snap/<id>.jpg` | Event snapshot (from SQLite BLOB) |
-| `GET /health` | `{uptime_s, last_detection_ts, frame_jpeg_bytes}` |
+| `GET /health` | `{uptime_s, last_detection_ts, frame_jpeg_bytes, metrics: {...}}` — latencies, FPS, RAM/CPU, queue, models size, cold start |
 | `GET /reload` | Trigger hot-reload of face database |
 | `GET /clear` | Delete all events and snapshots from SQLite |
 | `GET /debug/aligned.jpg` | Last aligned face (debug) |

@@ -21,6 +21,7 @@ from config import (
 )
 from detection import FaceDetector, FaceEncoder, _is_frontal
 from facedb import FaceDB, identify_face
+from metrics import Metrics
 from store import EventStore
 from tracker import FaceTracker
 from ui import draw_faces, open_camera, speak
@@ -48,12 +49,14 @@ def main():
     cfg = parse_args()
     os.makedirs(cfg.data_dir, exist_ok=True)
 
+    metrics = Metrics()
+    metrics.set_model_paths(SCRFD_MODEL, ARCFACE_MODEL)
     event_store = EventStore(cfg.db_path)
-    web = WebServer(cfg.web_port, event_store) if cfg.web_port else None
 
     print("[*] Initializing NPU...")
-    detector = FaceDetector(SCRFD_MODEL, core_mask=1)
-    encoder = FaceEncoder(ARCFACE_MODEL, core_mask=2)
+    detector = FaceDetector(SCRFD_MODEL, core_mask=1, metrics=metrics)
+    encoder = FaceEncoder(ARCFACE_MODEL, core_mask=2, metrics=metrics)
+    metrics.mark_models_ready()
     face_db = FaceDB(cfg.known_faces_dir, detector, encoder)
     tracker = FaceTracker(cfg)
 
@@ -72,6 +75,11 @@ def main():
     # ── async encode pipeline (Core1) ────────────────────────────────────
     _enc_in: queue.Queue = queue.Queue(maxsize=2)
     _enc_out: queue.Queue = queue.Queue()
+    web = (
+        WebServer(cfg.web_port, event_store, metrics, _enc_in)
+        if cfg.web_port
+        else None
+    )
 
     def _encode_loop():
         score_hist: dict = {}
@@ -85,7 +93,7 @@ def main():
                 score_hist.clear()
                 continue
 
-            frm, raw_faces = item
+            frm, raw_faces, t_frame = item
             encodings = face_db.encodings
             name_idx = face_db.name_index
             results = []
@@ -140,6 +148,7 @@ def main():
                             pass
 
                 results.append((bbox, name, score))
+            metrics.record_e2e(time.perf_counter() - t_frame)
             _enc_out.put(results)
 
     enc_thread = threading.Thread(target=_encode_loop, daemon=True)
@@ -181,6 +190,8 @@ def main():
 
         no_frame_count = 0
         frame_count += 1
+        frame_t0 = time.perf_counter()
+        metrics.tick_camera_frame()
 
         # ── hot-reload check ─────────────────────────────────────────
         now = time.time()
@@ -212,10 +223,11 @@ def main():
         # ── detect + encode ──────────────────────────────────────────
         if frame_count % cfg.process_every_n == 0:
             faces = detector.detect(frame)
+            metrics.tick_detect_run()
             try:
-                _enc_in.put_nowait((frame.copy(), faces))
+                _enc_in.put_nowait((frame.copy(), faces, frame_t0))
             except queue.Full:
-                pass
+                metrics.drop_encode_queue()
 
         try:
             face_results = _enc_out.get_nowait()
@@ -252,6 +264,7 @@ def main():
     encoder.release()
     if web:
         web.shutdown()
+    metrics.shutdown()
     event_store.close()
     print("[*] Done.")
 

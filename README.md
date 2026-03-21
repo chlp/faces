@@ -99,6 +99,18 @@ The database reloads automatically every 30 seconds when files change, or via th
 
 ## Resource monitoring
 
+### `GET /health`
+
+Returns JSON: `uptime_s`, `last_detection_ts`, `frame_jpeg_bytes`, and **`metrics`** — rolling averages for detection/embedding/E2E latency (ms), NPU vs CPU postprocess splits, **pipeline** vs **camera** FPS, `encode_faces_per_s`, estimated **`npu_inference_ms_per_s_est`**, RAM (MB), CPU % (via `psutil`), encode queue size/drops, on-disk **`models_bytes`**, and **`cold_start_ms`** (time to models ready, first detection, first completed encode batch). Example:
+
+```bash
+curl -s http://127.0.0.1:8080/health | jq
+```
+
+If `psutil` is missing, install dependencies (`pip install -r requirements.txt`); without it, CPU% may stay empty and RSS falls back to Linux `/proc` only.
+
+---
+
 Useful checks while the app is running on the board:
 
 - **[btop](https://github.com/aristocratos/btop)** — interactive view of CPU, memory, disks, network, and top processes. Install on Debian/Ubuntu: `sudo apt install btop`, then run `btop`.
